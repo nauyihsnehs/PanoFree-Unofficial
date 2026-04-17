@@ -1,348 +1,496 @@
-# 《PanoFree 复现计划（聚焦 Full Spherical Panorama）》
-
-## 1. 复现目标与边界
-
-- **复现目标**：只复现 `PanoFree` 的**方法链路**，不复现实验设置、指标、用户研究与大规模对比。
-- **复现范围**：集中在 `Full Spherical Panorama`，但**必须承认它依赖一个先生成好的 360° panorama 作为中间结果**，因此 360° 中段不是可选项，而是 full spherical 的前置子任务。
-- **复现原则**：`最小可运行 -> 功能补全 -> 贴近论文完整方法 -> 再考虑效果优化`
-- **推荐策略**：先做**文本到 full spherical**；先不做“任意预训练 T2I 模型兼容”，先锁定 `Stable Diffusion 2.0 / 2-inpainting + Diffusers`。
+# PanoFree Reproduction Plan
+**Target:** method-level reproduction only  
+**Scope:** focused on **Full Spherical Panorama** generation  
+**Principle:** iterative decomposition of subtasks/modules, from **minimum runnable** to **correct and complete** reproduction
 
 ---
 
-## 2. 总体判断
+## 1. Objective
 
-### 结论
-`PanoFree` 的方法复现 **可行**，而且比很多需要训练的 panorama 方法更适合工程复现；但如果目标是“正确+完整复现”，难点不在主干框架，而在**若干关键超参数和补充细节论文没有说透**。
+This project aims to reproduce the **methodological core** of **PanoFree** for **full spherical panorama generation**, without reproducing the original experimental setup, benchmark protocol, or reported metrics.
 
-### 为什么可行
-1. 主框架是传统而清晰的 `warp -> mask -> inpaint -> stitch/merge`。
-2. 论文明确说实现基于 `Diffusers + PyTorch + SD v2.0 generation/inpainting`。
-3. full spherical 的补充流程图给出了比较明确的阶段划分：  
-   `先 360° -> 再上下扩展 -> 再上下极点闭合`。
+The reproduction target is therefore:
 
-### 为什么不能一步到位
-1. **full spherical 本身不是独立模块**，它建立在“360° pano 已经可用”之上。
-2. `cross-view guidance / risky area / semantic-density tuning` 这几个模块虽然思路明确，但**关键数值与实现细节并不完整**。
-3. 补充材料说明了流程，但没有给出一套足够可直接照抄的参数表。
+- to recover the **pipeline logic**
+- to recover the **module interactions**
+- to recover the **key behaviors** claimed by the method
+- to produce a **working full-sphere generation system** whose outputs qualitatively reflect the intended design of the paper
+
+This is **not** a paper-level reproduction in the strict benchmark sense. It is a **method reconstruction and implementation project**.
 
 ---
 
-## 3. 方法拆解与复现优先级
+## 2. Reproduction Boundary
 
-## M0. 环境与基础依赖
-**目标**：搭出能稳定跑文本生成与 inpainting 的最小环境。
+### Included
+- sequential warping + inpainting framework
+- bidirectional generation with symmetric guidance
+- cross-view guidance via image-guided synthesis
+- risky area estimation and erasing
+- full spherical expansion from a 360° panorama
+- upward/downward expansion and pole closure
+- scene-structure-aware hallucination mitigation for top/bottom regions
 
-- **建议实现**
-  - Python + PyTorch
-  - HuggingFace Diffusers
-  - Stable Diffusion 2.0 / SD 2 Inpainting
-  - OpenCV / PIL / torchvision
-- **现成度**：很高
-- **外部依赖**：成熟
-- **难点**：几乎没有
-- **是否必须**：必须
-
----
-
-## M1. 透视视图 warping 与 mask 生成
-**目标**：从当前视图生成下一视图的 warped image 和 unknown mask。
-
-- **输入**
-  - 当前视图图像 `x_i`
-  - 视角变换 `P_i^{i+1}`（本质是 pitch/yaw 变化）
-- **输出**
-  - warped image `x̂_i`
-  - mask `m_i`
-- **建议实现**
-  - 先不追求论文级通用 correspondence 建模
-  - 先做基于球面/equirectangular 坐标的几何映射
-  - 实现：
-    1. perspective view <-> spherical/equirectangular
-    2. 根据下一视角采样已有内容
-    3. 空洞位置记为 inpaint 区域
-- **现成度**：中等
-- **成熟代码参考**
-  - panorama/perspective 投影代码很多，可自写
-  - 不依赖训练
-- **难点**
-  - 坐标系统与视角定义容易写错
-  - 上下扩展与极点附近畸变更明显
-- **是否必须**：必须
+### Excluded
+- exact dataset reconstruction
+- quantitative evaluation pipeline
+- user study
+- metric replication
+- paper-level hyperparameter search for best scores
+- extensive adapter/model swapping experiments
 
 ---
 
-## M2. 360° central panorama 最小版
-**目标**：先得到一个能闭环的 360° panorama，哪怕质量一般。
+## 3. Reproduction Standard
 
-- **建议先做最小版**
-  - 单向 sequential generation
-  - 固定 yaw 方向若干步
-  - 每步：
-    `warp -> inpaint -> 拼回全景画布`
-- **这一版先不加**
-  - cross-view guidance
-  - risky area erasing
-  - bidirectional merge
-- **验收标准**
-  - 能从 prompt 生成完整 360°
-  - 左右闭环可见，但允许有明显缝和风格漂移
-- **现成度**：中等
-- **难点**：闭环处最容易崩
-- **是否必须**：必须（full spherical 前置）
+The implementation should satisfy the following standard:
 
----
+### Minimum standard
+A working pipeline that:
+1. starts from an initial view,
+2. generates a 360° panorama,
+3. expands it toward upper and lower regions,
+4. closes the sphere at the north and south poles.
 
-## M3. Bidirectional Generation + Symmetric Guidance（先用于 360°）
-**目标**：复现 PanoFree 的核心增益模块之一，先把 360° 做稳。
+### Intermediate standard
+The system explicitly implements:
+- cross-view guidance,
+- risky area erasing,
+- symmetric bidirectional loop-closure logic,
+- full-sphere hallucination control.
 
-- **论文核心**
-  - 将单向路径拆成双向路径
-  - 最终在 `(pitch=0°, yaw=180°)` 处 merging
-  - 当前视图除依赖上一视图外，还用“另一条路径上的对称视图”作 guidance
-- **建议实现**
-  - 左右两条 yaw 对称路径
-  - 对称索引规则固定写死
-  - guidance 先只支持 1 张参考图
-  - 使用类似 SDEdit / img2img 风格的 guided inpainting
-- **最小实现**
-  - 先只做 360°，不要立即接 full spherical
-- **现成度**：中等
-- **外部依赖**
-  - Diffusers 能做
-  - 不需要额外训练
-- **难点**
-  - guidance 图如何与 warped 图融合
-  - 双路径合并时如何避免 tearing
-- **论文说明充分度**
-  - 思路清楚
-  - 但具体的 guidance 选择策略、融合细节、参数并不完整
-- **是否必须**：对“正确复现”几乎必须
+### Final standard
+The reproduced system should preserve the **intended algorithmic structure** of PanoFree, even when some low-level implementation details must be reasonably approximated.
 
 ---
 
-## M4. Cross-view Guidance（SDEdit 风格）
-**目标**：纠正 sequential generation 的 style/content drift。
+## 4. Recommended Reproduction Strategy
 
-- **论文给出的形式**
-  - 用过往视图中的一张 `x_g` 作为 guidance
-  - 与当前 warped 图按 mask 混合后，再进入 guided synthesis
-- **建议实现**
-  - 用 `img2img/inpaint` 的 strength 模拟论文里的 `t0`
-  - 先做：
-    `x̂_g = m_i * x_g + (1-m_i) * x̂_i`
-  - 然后喂给 inpainting / img2img
-- **最小实现**
-  - 只在 360° 阶段开启
-  - full spherical 阶段沿用同一接口
-- **现成度**：较高
-- **外部依赖**：成熟
-- **难点**
-  - `t0/strength`、CFG、noise 注入强度没被完整写清
-  - 论文只说 `t0 ∈ [0.9, 1.0)`，但不同任务最佳值不同
-- **是否必须**：强烈建议尽早加入  
-  > 从消融看，它是贡献最大的模块之一。
+## Stage A — Build the minimum runnable baseline first
 
----
+Start from the simplest viable system:
 
-## M5. Risky Area Estimation & Erasing
-**目标**：减少 artifact propagation。
+1. **Single-view initialization**
+   - Generate or load the initial perspective view.
+   - Fix a camera convention and projection convention early.
 
-- **论文拆成两层**
-  1. **基于距离/边缘** 的风险估计  
-  2. **基于颜色/平滑度** 的风险估计
-- **建议工程顺序**
-  - 先实现 `Distance + Edge`
-  - 暂时不做 `Color + Smoothness`
-- **原因**
-  - 消融显示前者收益更明显，后者增益较小
-  - 论文自己也承认 color/smoothness 受低层噪声影响更大
-- **最小实现**
-  - 当前视图生成完后，维护一个 risk map
-  - 对下一步 warped 结果做 remask
-  - 对 remask 做 Gaussian/median 平滑
-- **现成度**：中等
-- **难点**
-  - `w` 组合权重、阈值函数 `Mr`、滤波核大小，论文没有给定
-  - 需要自行调参
-- **是否必须**
-  - 对“能跑”不是必须
-  - 对“接近论文效果”很重要
+2. **Vanilla sequential warping + inpainting**
+   - Implement view warping between adjacent viewpoints.
+   - Use a pretrained text-guided inpainting model.
+   - Do **not** add any guidance or risky-area logic yet.
+
+3. **360° panorama first**
+   - Reproduce only the horizontal panorama path first.
+   - Ensure that the viewpoint schedule, warping, masking, and stitching are all stable.
+
+4. **Then extend to full spherical panorama**
+   - Use the generated 360° panorama as the center band.
+   - Expand upward and downward separately.
+   - Finally inpaint the two poles.
+
+This order is important: **full-sphere reproduction should not begin before the 360° center band is stable**.
 
 ---
 
-## M6. Full Spherical：上下扩展
-**目标**：从 360° pano 向上、向下扩展到更高 pitch 区域。
+## 5. Canonical Pipeline to Reproduce
 
-- **补充材料给出的阶段**
-  1. 已有 360° pano
-  2. 先 warp 到 `(ϕ, 0°)` 与 `(-ϕ, 0°)` 生成上下扩展初始视图
-  3. 分别沿 pitch 方向继续扩展
-- **建议实现**
-  - 先固定一个人工 `ϕ`（如 45° 或 50°）做工程近似
-  - 上下两个方向完全复用同一套代码
-- **现成度**：中等
-- **难点**
-  - `ϕ` 没写明
-  - 扩展步数、每步 pitch 增量、FOV 选择未明确
-  - 极区畸变会放大 artifact
-- **是否必须**：必须（这是 full spherical 的主体）
+PanoFree’s full spherical generation can be reconstructed as the following method sequence:
 
----
+### Phase 1 — Generate the 360° central band
+- Initialize at the front view centered at `(pitch=0°, yaw=0°)`.
+- Use **bidirectional generation with symmetric guidance** along the yaw axis.
+- Merge the two horizontal paths at the back view to ensure loop closure.
 
-## M7. Full Spherical：上下极点闭合
-**目标**：生成 top / bottom pole，闭合整个球面。
+### Phase 2 — Upward and downward expansion
+- From the completed 360° panorama, warp to `(pitch=+φ, yaw=0°)` and `(pitch=-φ, yaw=0°)` to create initial views for vertical expansion.
+- Apply the same PanoFree logic separately along the positive-pitch and negative-pitch directions.
 
-- **补充材料给出的阶段**
-  - 最终 warp 到 `(90°, 0°)` 与 `(-90°, 0°)`，对未知区域做 inpainting
-- **建议实现**
-  - 将上下扩展结果先拼回完整 equirectangular
-  - 再从 pole-centered perspective view 做最后一次修补
-- **现成度**：中等
-- **难点**
-  - 极点附近最容易出现 hallucination、拉伸、重复纹理
-  - 若没有 scene structure prior，会明显崩
-- **是否必须**：必须
+### Phase 3 — Pole closure
+- Warp to `(pitch=+90°, yaw=0°)` and `(pitch=-90°, yaw=0°)`.
+- Inpaint the remaining unknown areas to close the sphere.
+
+This should be treated as the **reference pipeline definition** for the reproduction.
 
 ---
 
-## M8. Scene Structure Prior（full spherical 专属）
-**目标**：抑制“天空里长出城市 / 水下出现地面建筑”这类 hallucination。
+## 6. Module Decomposition
 
-- **论文思路**
-  - 从初始视图抽取 scene prior
-  - 例如 upward expansion 的首视图，使用初始图像的**上 1/3 区域**作为 guidance
-  - 通过**降低 guidance scale、增大 FOV、调初始噪声方差**，让生成更服从结构先验而不是原始文本局部语义
-- **建议实现顺序**
-  1. 先只做“上 1/3 / 下 1/3 图像先验”
-  2. 再做 guidance scale 降低
-  3. 最后调噪声方差
-- **现成度**：中等
-- **难点**
-  - 这是论文里**最像经验工程**的一块
-  - guidance scale/FOV/noise variance 的具体数值没给
-- **是否必须**
-  - 对 full spherical 的“正确性”非常关键
-  - 不加它，极区 hallucination 风险很高
+## M0. Geometry and image-space infrastructure
+### Goal
+Build the non-learning infrastructure required by every later module.
 
----
+### Deliverables
+- camera parameter definition
+- spherical / equirectangular / perspective conversion utilities
+- viewpoint scheduler
+- warping operator
+- mask generation
+- stitching / accumulation utilities
+- visualization tools for debugging masks and warped views
 
-## 4. 推荐复现路线（按迭代）
+### Reproduction feasibility
+**High.** This is engineering-heavy but conceptually straightforward.
 
-## Iter-0：能跑通的基础框架
-- 完成 M0 + M1
-- 验证单步 `warp -> mask -> inpaint`
-
-## Iter-1：最小 360°
-- 完成 M2
-- 目标：先生成一个闭环但粗糙的 360° pano
-
-## Iter-2：双向 360°
-- 完成 M3
-- 目标：把 360° 的闭环和整体一致性拉起来
-
-## Iter-3：加入 cross-view guidance
-- 完成 M4
-- 目标：减少风格漂移、重复物体、远距离内容突变
-
-## Iter-4：先做 full spherical 骨架
-- 完成 M6 + M7，但先**不加 risky area / scene prior**
-- 目标：流程上得到完整球面
-
-## Iter-5：加入 scene structure prior
-- 完成 M8
-- 目标：先解决“上下极区 hallucination”
-
-## Iter-6：加入 risky area（先 Distance + Edge）
-- 完成 M5 的主干
-- 目标：减少扩展阶段的 artifact propagation
-
-## Iter-7：补 color/smoothness risk
-- 只在前面都稳定后再做
-- 这是“完整复现”而不是“最小可运行”的内容
+### Risk
+Projection conventions can silently break the entire system. This module must be validated very early.
 
 ---
 
-## 5. 可行度判断
+## M1. Vanilla sequential generation baseline
+### Goal
+Implement the paper’s underlying sequential warping-and-inpainting process before any correction module.
 
-## 5.1 有现成/成熟代码参考的部分
-- Diffusers + SD2.0 / SD2-inpainting
-- img2img / inpaint 风格的 SDEdit 替代实现
-- panorama / perspective 的投影与反投影
-- mask 后处理（Gaussian / median / threshold）
-- equirectangular stitching
+### Deliverables
+- iterative generation from one view to the next
+- text-conditioned inpainting
+- panorama accumulation
+- baseline 360° and full-sphere outputs
 
-**判断**：这些都属于工程工作量，不属于研究性阻塞点。
+### Why this matters
+This baseline is not only a starting point; it is also needed for ablations and debugging. PanoFree is explicitly built as a correction of **deficient conditions** in vanilla sequential generation.
 
-## 5.2 需要自写，但难度可控的部分
-- 双向路径与对称 guidance 调度
-- risk map 的维护与 remask
-- full spherical 上下扩展/极点闭合调度
-- scene prior 注入
+### Reproduction feasibility
+**High.**
 
-**判断**：难，但都是“能靠试验补全”的工程问题。
+### Expected issues
+- style drift
+- repeated objects
+- image tearing
+- hallucinations near top/bottom
+- severe artifact propagation
 
-## 5.3 难以严格复现、论文说明不足的部分
-1. `ϕ` 的具体取值  
-2. upward/downward 扩展的 exact step schedule  
-3. guidance image 的精确选择策略  
-4. risky area 的各项权重、阈值、滤波参数  
-5. scene structure prior 中 guidance scale / FOV / noise variance 的具体数值  
-6. full spherical 阶段 prompt 细节与 prompt engineering 规则  
-7. 不同阶段是否使用同一 inpainting 配置，论文没有给完整参数表
-
-**判断**：  
-这意味着你更适合做的是**“方法等价复现”**，而不是“位级别复现论文结果”。
+These failures are expected and should be treated as evidence that the baseline is functioning as intended.
 
 ---
 
-## 6. 复现难点排序
+## M2. Cross-view guidance
+### Goal
+Correct **biased conditions** by conditioning the current generation on more than one prior view.
 
-### 最难
-1. **full spherical 的上下扩展与极点闭合**
-2. **scene structure prior 的参数化落地**
-3. **risk map 的实际有效阈值设计**
+### Core idea
+Instead of conditioning only on the immediately previous view, introduce a guidance image from earlier generated views. PanoFree instantiates this with **SDEdit-style guided image synthesis**.
 
-### 中等
-4. **双向路径 + symmetric guidance**
-5. **cross-view guidance 与 inpainting 的融合**
+### Minimum implementation
+- select one guidance image from previous views
+- paste it into masked regions of the warped image
+- run image-guided diffusion/inpainting with sufficiently large noise level so that the guidance acts as a bias, not a hard copy
 
-### 最容易
-6. **基础 warping / stitching / mask**
-7. **Diffusers 接入**
-8. **vanilla sequential baseline**
+### Reproduction priority
+**Very high.** This is one of the most important modules and, according to the paper’s own ablation, the strongest contributor among the correction modules.
 
----
+### Reproduction feasibility
+**Moderate to high.**
+The method idea is clear, but implementation depends on how image-guided editing is integrated with the chosen diffusion/inpainting stack.
 
-## 7. 最小可运行版本定义（建议）
-
-## MVP-A：方法骨架版
-- M0 + M1 + M2 + M6 + M7
-- 不做 CG / risky area / scene prior
-- 结果：能产出 full spherical，但 artifact 和 hallucination 会很多
-
-## MVP-B：可用版
-- MVP-A + M3 + M4 + M8
-- 结果：基本具备 PanoFree 的主要思想，full spherical 可看
-
-## MVP-C：接近论文版
-- MVP-B + M5
-- 结果：更接近论文完整方法
+### Engineering recommendation
+Implement a simplified but explicit version first:
+- one guidance image only
+- fixed guidance-selection rule
+- fixed noise level / strength
+- no adaptive policy in the first version
 
 ---
 
-## 8. 我的建议
+## M3. Risky area estimation and erasing
+### Goal
+Correct **noisy conditions** by erasing regions likely to propagate artifacts before the next inpainting step.
 
-如果目标是“最短时间拿到一个像样的 PanoFree Full Spherical 复现”，最合理路线是：
+### Risk sources described by the paper
+- distance from the initial view
+- proximity to image edges
+- abrupt color change
+- abrupt smoothness / gradient change
+- jagged mask edges
+- sharp mask boundaries
 
-1. **先把 360° 中段做好**，不要一开始就碰极点；
-2. **优先做 cross-view guidance**，因为它是最核心、最确定有收益的模块；
-3. **full spherical 先加 scene structure prior，再加 risky area**；
-4. `Color/Smoothness risk` 放到最后，它不是第一优先级；
-5. 接受现实：你大概率做出的会是**工程等价复现**，而不是论文作者内部参数的严格复刻。
+### Minimum implementation
+Implement in the following order:
+
+1. **distance-based risk**
+2. **edge-based risk**
+3. **mask smoothing / anti-aliasing**
+4. optional color-based risk
+5. optional smoothness-based risk
+
+### Reproduction priority
+**High**, but incremental.
+
+### Engineering recommendation
+Do **not** implement all risk terms at once.
+The most stable order is:
+- distance + edge first
+- then mask cleanup
+- only then color / smoothness heuristics
+
+### Reproduction feasibility
+**Moderate.**
+The logic is clear, but low-level details are heuristic-heavy.
+
+### Why this is not fully straightforward
+The paper describes the priors and formulas at a high level, but practical thresholding, weighting, filtering radii, and remasking behavior still require implementation choices.
 
 ---
 
-## 9. 一句话结论
+## M4. Bidirectional generation with symmetric guidance
+### Goal
+Correct **partial conditions** and reduce long-range drift by generating from two symmetric directions and merging them.
 
-`PanoFree` 很适合按“子模块迭代”方式复现；  
-**最关键的前置不是 full spherical 本身，而是先做稳 360° central panorama；最关键的增强不是 risky area，而是 cross-view guidance + scene structure prior。**
+### Core behavior
+- split one long generation path into two symmetric paths
+- generate from both directions
+- use the symmetric view from the opposite path as guidance
+- merge at a closing view
+
+### Reproduction priority
+**Very high** for 360° generation, because the full spherical pipeline depends on a stable central band.
+
+### Reproduction feasibility
+**Moderate.**
+The conceptual design is clear, but the exact scheduling policy and symmetric correspondence bookkeeping require careful implementation.
+
+### Engineering recommendation
+Treat this as a scheduling/control module, not an image model module.
+The main failure mode is not image quality but **incorrect synchronization of opposite paths**.
+
+---
+
+## M5. Full spherical expansion logic
+### Goal
+Extend the stable 360° center band into a complete sphere.
+
+### Minimum implementation
+- generate the 360° center band first
+- create initial upward and downward expansion views at `±φ`
+- run vertical expansion independently for the upper and lower branches
+- close the top and bottom poles at `±90°`
+
+### Reproduction priority
+**Essential**, but only after M1–M4 are stable on the center band.
+
+### Reproduction feasibility
+**Moderate.**
+The overall structure is stated clearly, but the paper does not fully specify the optimal `φ`, vertical scheduling density, or whether all reuse policies are identical to the horizontal case.
+
+### Engineering recommendation
+Start with a fixed `φ` and a minimal number of vertical steps.
+Do not optimize coverage density before the pipeline is stable.
+
+---
+
+## M6. Scene-structure-aware hallucination mitigation
+### Goal
+Reduce top/bottom hallucinations caused by reusing the same prompt in regions where scene priors change drastically.
+
+### Core idea
+Use the initial image as a source of **scene-structure prior** and weaken prompt dominance during expansion and closure:
+- extract prior visual content from the initial view
+- reduce guidance scale when moving toward top/bottom
+- enlarge field of view
+- adjust initial noise variance
+
+### Reproduction priority
+**High** for full spherical panorama specifically.
+
+### Reproduction feasibility
+**Moderate to low.**
+The idea is clear, but the paper gives limited operational detail on exact parameter schedules.
+
+### Engineering recommendation
+Implement a simplified first version:
+- upper branch uses upper crop of the initial view as guidance
+- lower branch uses lower crop analogously if appropriate
+- use manually tuned reduced text guidance for pole closure
+
+---
+
+## 7. Implementation Order
+
+A practical order is:
+
+1. **M0** Geometry/projection/warping infrastructure  
+2. **M1** Vanilla sequential 360° baseline  
+3. **M4** Bidirectional generation with symmetric guidance  
+4. **M2** Cross-view guidance  
+5. **M3** Risky area estimation and erasing  
+6. **M5** Full spherical expansion  
+7. **M6** Hallucination mitigation for top/bottom  
+8. Final cleanup, stabilization, and code refactoring
+
+This order is preferable because it isolates failures:
+- if M1 fails, geometry or inpainting is broken
+- if M4 fails, scheduling or path symmetry is broken
+- if M2/M3 fail, the correction modules are unstable
+- if M5/M6 fail, the vertical extension logic is under-specified or weak
+
+---
+
+## 8. Feasibility Assessment by Module
+
+| Module | Feasibility | Main reason |
+|---|---:|---|
+| Geometry / projection / warping | High | standard engineering problem |
+| Vanilla sequential pipeline | High | directly reproducible with existing inpainting stacks |
+| Bidirectional generation | Moderate | requires careful path design and synchronization |
+| Cross-view guidance | Moderate-High | concept is clear, integration with diffusion stack needs engineering |
+| Distance / edge risky erasing | Moderate | heuristic but well-motivated |
+| Color / smoothness risky erasing | Moderate-Low | more sensitive, lower-level, noisier heuristics |
+| Full spherical vertical expansion | Moderate | pipeline is clear, scheduling details are not fully specified |
+| Hallucination mitigation for top/bottom | Moderate-Low | conceptually clear but under-specified in operational detail |
+| Exact paper-faithful hyperparameters | Low | supplementary-dependent and partly heuristic |
+
+---
+
+## 9. Existing / Mature Code References
+
+## Strong references
+These are suitable as direct engineering bases:
+- **Diffusers** for Stable Diffusion-based text generation and inpainting
+- official or standard **Stable Diffusion inpainting pipelines**
+- **SDEdit** as the conceptual and practical reference for image-guided editing
+- standard image processing libraries for mask filtering, Gaussian smoothing, and median filtering
+
+## Useful adjacent references
+These are not direct drop-in reproductions of PanoFree, but can provide implementation ideas:
+- **L-MAGIC / MMPano** for warping + inpainting panorama pipelines
+- **Text2Room** for sequential view generation and geometry-aware iteration logic
+- existing panorama projection / cubemap / equirectangular conversion utilities from public vision or graphics codebases
+
+## Weak reference
+- **PanoFree official repository** should not be assumed to be a usable reproduction base unless the actual implementation is fully available and complete. It should be treated as a possible pointer, not as a guaranteed dependency.
+
+---
+
+## 10. External Dependencies
+
+A realistic implementation will likely depend on:
+
+### Core generative stack
+- PyTorch
+- Diffusers
+- a Stable Diffusion checkpoint for text generation
+- a Stable Diffusion inpainting checkpoint
+
+### Image processing / geometry
+- NumPy
+- OpenCV
+- PIL
+- SciPy or equivalent for filtering/interpolation
+- custom spherical projection utilities
+
+### Optional but likely useful
+- xFormers or attention acceleration
+- mixed precision / memory optimization utilities
+- segmentation or saliency tools only if debugging is needed
+- experiment logging / visual debugging tools
+
+### Possibly required if aiming for closer faithfulness
+- explicit SDEdit integration rather than an approximate image-guided inpainting substitute
+
+---
+
+## 11. Hard-to-Reproduce Parts
+
+The following parts are likely to be the hardest:
+
+### 11.1 Exact guidance scheduling
+The paper explains the role of cross-view guidance, but the exact practical policy for:
+- selecting the guidance image,
+- setting the guidance strength,
+- choosing noise level,
+- varying this across panorama types,
+is not fully operationalized.
+
+### 11.2 Risk fusion details
+The risky-area module is described by multiple risk terms, but exact:
+- weighting coefficients,
+- thresholds,
+- filtering sizes,
+- remasking schedule,
+are still engineering choices.
+
+### 11.3 Full spherical vertical policy
+The paper clearly states the high-level full-sphere procedure, but the exact:
+- pitch step size,
+- number of vertical steps,
+- whether horizontal and vertical branches share identical settings,
+- best pole-closure configuration,
+are not fully pinned down.
+
+### 11.4 Hallucination-control schedule
+The idea of using scene priors from the initial image and changing guidance scale / variance is clear, but exact schedules are not standardized in the paper.
+
+### 11.5 Stitching policy and per-pitch resolution behavior
+Full-sphere generation depends strongly on how viewpoint FOV and sampling density vary with pitch. This is method-critical but not exhaustively specified.
+
+---
+
+## 12. Under-Specified Points in the Paper
+
+The following should be treated as **explicit implementation assumptions** in your codebase and documentation:
+
+1. exact viewpoint schedule for full spherical generation  
+2. exact pitch-step parameter `φ` and its tuning strategy  
+3. exact guidance-image selection rule under all panorama modes  
+4. exact noise level / strength schedule for SDEdit-based guidance  
+5. exact weights for distance / edge / color / smoothness risks  
+6. exact thresholding and mask post-processing details  
+7. exact handling of top/bottom branch prompt modification  
+8. exact stitching / blending strategy for vertical completion outputs  
+
+These assumptions should be written down clearly so that the project remains reproducible even if it is not paper-identical.
+
+---
+
+## 13. Recommended Development Milestones
+
+## Milestone 1 — Minimum runnable 360°
+- warping works
+- masks are correct
+- inpainting runs end-to-end
+- central 360° panorama can be closed
+
+## Milestone 2 — Stable 360°
+- bidirectional generation works
+- symmetric guidance works
+- severe loop-closure tearing is reduced
+
+## Milestone 3 — Corrected 360°
+- cross-view guidance is active
+- risky area erasing is active
+- visible artifact propagation is reduced
+
+## Milestone 4 — Minimum full sphere
+- upward/downward expansion runs
+- pole closure runs
+- output covers the full spherical domain
+
+## Milestone 5 — Full method reproduction
+- hallucination mitigation is active
+- top/bottom failures are reduced
+- implementation structure matches the paper’s intended design
+
+---
+
+## 14. Practical Success Criteria
+
+Since this is a method-level reproduction, success should be judged by the following:
+
+- The code structure reflects the paper’s module decomposition.
+- The system generates a complete full spherical panorama.
+- Cross-view guidance measurably improves stability over the vanilla baseline.
+- Risky area erasing reduces obvious artifact propagation.
+- Symmetric bidirectional generation improves loop closure.
+- The top/bottom regions are meaningfully better than vanilla sequential expansion.
+- All paper-dependent assumptions are documented explicitly.
+
+---
+
+## 15. Final Recommendation
+
+The most reliable strategy is to treat this reproduction as a **controlled engineering reconstruction** rather than an exact paper-faithful clone.
+
+In practice, the project should be framed as:
+
+> **“Reproduce the algorithmic structure and qualitative behavior of PanoFree for Full Spherical Panorama generation, using stable modern diffusion tooling and explicitly documented implementation assumptions where the paper is under-specified.”**
+
+That framing is both technically realistic and methodologically sound.
