@@ -85,6 +85,19 @@ def world_rays_to_equirectangular(world_rays, pano_width, pano_height):
     return u, v
 
 
+def equirectangular_to_world_rays(pano_width, pano_height):
+    xs = np.arange(pano_width, dtype=np.float32)
+    ys = np.arange(pano_height, dtype=np.float32)
+    grid_x, grid_y = np.meshgrid(xs, ys)
+    yaw = ((grid_x / (pano_width - 1.0)) - 0.5) * (2.0 * math.pi)
+    pitch = (0.5 - (grid_y / (pano_height - 1.0))) * math.pi
+    cos_pitch = np.cos(pitch)
+    x = cos_pitch * np.sin(yaw)
+    y = np.sin(pitch)
+    z = cos_pitch * np.cos(yaw)
+    return np.stack([x, y, z], axis=-1).astype(np.float32)
+
+
 def project_perspective_to_equirectangular(image, view, pano_width, pano_height):
     intrinsics = build_intrinsics(view["width"], view["height"], view["fov_deg"])
     rotation = build_view_rotation(view)
@@ -113,4 +126,3 @@ def view_center_on_equirectangular(view, pano_width, pano_height):
         pano_height,
     )
     return int(round(float(u[0, 0]))), int(round(float(v[0, 0])))
-

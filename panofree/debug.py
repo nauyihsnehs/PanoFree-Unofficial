@@ -106,3 +106,65 @@ def save_phase1_debug_artifacts(run_dir, artifacts):
     save_image(os.path.join(run_dir, "10_source_on_equirect.png"), source_overlay)
     save_image(os.path.join(run_dir, "11_target_on_equirect.png"), target_overlay)
 
+
+def save_phase2_debug_artifacts(run_dir, artifacts):
+    ensure_dir(run_dir)
+
+    save_json(os.path.join(run_dir, "00_config.json"), artifacts["config"])
+    save_text(os.path.join(run_dir, "01_prompt.txt"), artifacts["prompt"])
+    save_json(os.path.join(run_dir, "02_steps_manifest.json"), artifacts["steps_manifest"])
+    save_image(os.path.join(run_dir, "03_initial_view.png"), artifacts["initial_view"])
+    save_image(os.path.join(run_dir, "04_central_360_equirect.png"), artifacts["stitched_panorama"])
+    save_image(os.path.join(run_dir, "05_central_360_coverage.png"), artifacts["stitched_coverage"])
+    save_image(os.path.join(run_dir, "06_central_360_band_crop.png"), artifacts["band_crop"])
+
+    contact_images = [Image.fromarray(artifacts["initial_view"], mode="RGB")]
+    contact_labels = ["x0"]
+    for record in artifacts["view_records"]:
+        contact_images.append(Image.fromarray(record["image"], mode="RGB"))
+        contact_labels.append(record["name"])
+    build_contact_sheet(contact_images, contact_labels).save(
+        os.path.join(run_dir, "07_view_contact_sheet.png")
+    )
+
+    for index, record in enumerate(artifacts["view_records"]):
+        step_dir = os.path.join(run_dir, "{:02d}_{}".format(index + 1, record["name"]))
+        ensure_dir(step_dir)
+        save_json(
+            os.path.join(step_dir, "00_meta.json"),
+            {
+                "name": record["name"],
+                "kind": record["kind"],
+                "yaw_deg": record["view"]["yaw_deg"],
+                "pitch_deg": record["view"]["pitch_deg"],
+                "source_name": record.get("source_name", ""),
+                "guidance_name": record.get("guidance_name", ""),
+            },
+        )
+        save_image(os.path.join(step_dir, "01_output.png"), record["image"])
+        save_image(os.path.join(step_dir, "02_guidance.png"), record["guidance_image"])
+        save_image(os.path.join(step_dir, "03_guided_input.png"), record["guided_input"])
+        save_image(os.path.join(step_dir, "04_stitched_valid_mask.png"), record["stitched_valid_mask"])
+        save_image(
+            os.path.join(step_dir, "05_stitched_weight_map.png"),
+            np.clip(record["stitched_weight_map"], 0.0, 255.0).astype(np.uint8),
+        )
+        overlay, _ = build_equirectangular_debug(
+            record["image"],
+            record["view"],
+            artifacts["pano_width"],
+            artifacts["pano_height"],
+            (80, 220, 255),
+        )
+        save_image(os.path.join(step_dir, "06_on_equirect.png"), overlay)
+
+        if record["kind"] == "step":
+            save_image(os.path.join(step_dir, "07_warped.png"), record["warped"])
+            save_image(os.path.join(step_dir, "08_missing_mask.png"), record["missing_mask"])
+        else:
+            save_image(os.path.join(step_dir, "07_left_warped.png"), record["left_warped"])
+            save_image(os.path.join(step_dir, "08_right_warped.png"), record["right_warped"])
+            save_image(os.path.join(step_dir, "09_left_known_mask.png"), record["left_known_mask"])
+            save_image(os.path.join(step_dir, "10_right_known_mask.png"), record["right_known_mask"])
+            save_image(os.path.join(step_dir, "11_merge_composite.png"), record["merge_composite"])
+            save_image(os.path.join(step_dir, "12_missing_mask.png"), record["missing_mask"])

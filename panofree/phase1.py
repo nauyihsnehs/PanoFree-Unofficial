@@ -1,25 +1,12 @@
-import copy
-import json
 import os
 
-import numpy as np
-from PIL import Image
-
+from .common import ensure_prompt_and_models, load_config as load_json_config, load_source_image, resolve_run_dir
 from .debug import save_phase1_debug_artifacts
 from .pipeline import generate_initial_view, run_inpaint
 from .warp import build_view_homography, warp_image_and_mask
 
 
-def deep_update(base, override):
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            deep_update(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-
-def load_config(config_path):
+def load_phase1_config(config_path):
     defaults = {
         "prompt": "",
         "seed": 1234,
@@ -59,30 +46,13 @@ def load_config(config_path):
         },
     }
 
-    with open(config_path, "r", encoding="utf-8") as handle:
-        user_config = json.load(handle)
-
-    config = deep_update(copy.deepcopy(defaults), user_config)
+    config = load_json_config(config_path, defaults)
     validate_config(config)
     return config
 
 
 def validate_config(config):
-    if not config.get("prompt"):
-        raise RuntimeError("`prompt` is required for Phase 1.")
-
-    if not config["models"].get("base_model"):
-        raise RuntimeError("`models.base_model` is required for Phase 1.")
-
-    if not config["models"].get("inpaint_model"):
-        raise RuntimeError("`models.inpaint_model` is required for Phase 1.")
-
-
-def load_source_image(path, expected_size):
-    image = Image.open(path).convert("RGB")
-    if image.size != expected_size:
-        image = image.resize(expected_size, resample=Image.Resampling.LANCZOS)
-    return np.array(image, dtype=np.uint8)
+    ensure_prompt_and_models(config, "Phase 1")
 
 
 def build_inpaint_input(warped, missing_mask):
@@ -92,7 +62,7 @@ def build_inpaint_input(warped, missing_mask):
 
 
 def run_phase1(config_path):
-    config = load_config(config_path)
+    config = load_phase1_config(config_path)
 
     source_image_path = config["input"].get("source_image")
     source_size = (
@@ -115,14 +85,14 @@ def run_phase1(config_path):
         ),
     )
     inpaint_input = build_inpaint_input(warped, missing_mask)
-    inpaint_output = run_inpaint(
+    inpaint_input, inpaint_output = run_inpaint(
         config["prompt"],
         inpaint_input,
         missing_mask,
         config,
     )
 
-    run_dir = os.path.abspath(config["output"]["run_dir"])
+    run_dir = resolve_run_dir(config["output"]["run_dir"])
     save_phase1_debug_artifacts(
         run_dir,
         {
