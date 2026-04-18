@@ -158,6 +158,9 @@ def run_guided_inpaint(prompt, init_image, mask_image, guidance_image, config, g
     if guidance_image is not None:
         image = blend_guidance_image(init_image, mask_image, guidance_image)
 
+    if strength is None:
+        strength = inpaint_config.get("strength", 1.0)
+
     result = pipe(
         prompt=prompt,
         image=image_to_pil(image),
@@ -165,7 +168,7 @@ def run_guided_inpaint(prompt, init_image, mask_image, guidance_image, config, g
         num_inference_steps=inpaint_config.get("num_inference_steps", 50),
         guidance_scale=inpaint_config.get("guidance_scale", 7.5),
         generator=generator,
-        strength=inpaint_config.get("strength", strength if strength is not None else 1.0),
+        strength=strength,
     )
     return image, pil_to_array(result.images[0])
 
