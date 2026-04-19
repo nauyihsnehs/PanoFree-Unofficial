@@ -23,4 +23,4 @@
 *.exe
 
 .idea
-/scripts/outputs/
+outputs
