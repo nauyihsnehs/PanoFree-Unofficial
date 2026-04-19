@@ -1248,13 +1248,13 @@ def build_expansion_view(config, yaw_deg, pitch_deg):
 def get_expansion_guidance_name(name):
     mapping = {
         "u0": "x0",
-        "u1": "x0",
+        "u1": "u0",
         "u-1": "u1",
-        "u_merge": "x0",
+        "u_merge": "x_merge",
         "d0": "x0",
-        "d1": "x0",
+        "d1": "d0",
         "d-1": "d1",
-        "d_merge": "x0",
+        "d_merge": "x_merge",
     }
     return mapping[name]
 
@@ -1415,7 +1415,7 @@ def run_expansion_ring(config, prefix, pitch_deg, central_records, upward_record
         {"name": prefix + "_merge", "kind": "merge", "yaw_deg": 180.0},
     ]
     for step_spec in schedule:
-        completed_records = central_records + upward_records + downward_records
+        completed_records = central_records + ring_records
         record = run_expansion_target(
             config,
             step_spec["name"],
@@ -1660,4 +1660,3 @@ class Flow:
     build_pole_view = staticmethod(build_pole_view)
     run_pole_target = staticmethod(run_pole_target)
     build_pipeline_note = staticmethod(build_pipeline_note)
-
