@@ -46,10 +46,6 @@ mask_dilate_iterations = 1
 risk_fallback_threshold = 0.5
 
 [expansion]
-# Paper-default backup values for expansion:
-# sdedit_t0 = 0.90
-# guidance_scale = 2.0
-# noise_variance_multiplier = 1.05
 pitch_offset_deg = 25.0
 fov_deg = 110.0
 yaw_stride_deg = 80.0
@@ -68,10 +64,6 @@ mask_dilate_iterations = 1
 risk_fallback_threshold = 0.5
 
 [pole_closure]
-# Paper-default backup values for pole closure:
-# sdedit_t0 = 0.90
-# guidance_scale = 1.0
-# noise_variance_multiplier = 1.10
 fov_deg = 90.0
 sdedit_t0 = 0.90
 guidance_scale = 1.0

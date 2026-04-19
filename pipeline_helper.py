@@ -792,6 +792,15 @@ def build_equirectangular_debug(image, view, pano_width, pano_height, point_colo
     return np.array(overlay, dtype=np.uint8)
 
 
+def save_optional_image(record, step_dir, filename, key, scale=1.0):
+    if key not in record:
+        return
+    image = record[key]
+    if abs(float(scale) - 1.0) > 1e-8:
+        image = image * float(scale)
+    save_image(os.path.join(step_dir, filename), image)
+
+
 def save_group_artifacts(group_dir, records, pano_width, pano_height):
     ensure_dir(group_dir)
     contact_images = [Image.fromarray(record["image"], mode="RGB") for record in records]
@@ -813,12 +822,9 @@ def save_group_artifacts(group_dir, records, pano_width, pano_height):
             },
         )
         save_image(os.path.join(step_dir, "01_output.png"), record["image"])
-        if "guidance_image" in record:
-            save_image(os.path.join(step_dir, "02_guidance.png"), record["guidance_image"])
-        if "guided_input" in record:
-            save_image(os.path.join(step_dir, "03_guided_input.png"), record["guided_input"])
-        if "stitched_valid_mask" in record:
-            save_image(os.path.join(step_dir, "04_stitched_valid_mask.png"), record["stitched_valid_mask"])
+        save_optional_image(record, step_dir, "02_guidance.png", "guidance_image")
+        save_optional_image(record, step_dir, "03_guided_input.png", "guided_input")
+        save_optional_image(record, step_dir, "04_stitched_valid_mask.png", "stitched_valid_mask")
         if "stitched_weight_map" in record:
             save_image(
                 os.path.join(step_dir, "05_stitched_weight_map.png"),
@@ -829,35 +835,32 @@ def save_group_artifacts(group_dir, records, pano_width, pano_height):
             build_equirectangular_debug(record["image"], record["view"], pano_width, pano_height, (80, 220, 255)),
         )
         if "risk_maps" in record:
-            save_image(os.path.join(step_dir, "07_risk_distance.png"), record["risk_maps"]["distance"] * 255.0)
-            save_image(os.path.join(step_dir, "08_risk_edge.png"), record["risk_maps"]["edge"] * 255.0)
-            save_image(os.path.join(step_dir, "09_risk_color.png"), record["risk_maps"]["color"] * 255.0)
-            save_image(os.path.join(step_dir, "10_risk_smoothness.png"), record["risk_maps"]["smoothness"] * 255.0)
-            save_image(os.path.join(step_dir, "11_risk_combined.png"), record["risk_maps"]["combined"] * 255.0)
-        if "base_missing_mask" in record:
-            save_image(os.path.join(step_dir, "12_base_missing_mask.png"), record["base_missing_mask"])
-        if "warped_combined_risk" in record:
-            save_image(os.path.join(step_dir, "13_warped_combined_risk.png"), record["warped_combined_risk"] * 255.0)
-        if "risk_selected_mask" in record:
-            save_image(os.path.join(step_dir, "14_risk_selected_mask.png"), record["risk_selected_mask"])
-        if "remasked_mask" in record:
-            save_image(os.path.join(step_dir, "15_remasked_mask.png"), record["remasked_mask"])
-        if "smoothed_mask" in record:
-            save_image(os.path.join(step_dir, "16_smoothed_mask.png"), record["smoothed_mask"])
-        if "warped" in record:
-            save_image(os.path.join(step_dir, "17_warped.png"), record["warped"])
-        if "known_mask" in record:
-            save_image(os.path.join(step_dir, "18_known_mask.png"), record["known_mask"])
-        if "left_warped" in record:
-            save_image(os.path.join(step_dir, "19_left_warped.png"), record["left_warped"])
-        if "right_warped" in record:
-            save_image(os.path.join(step_dir, "20_right_warped.png"), record["right_warped"])
-        if "left_known_mask" in record:
-            save_image(os.path.join(step_dir, "21_left_known_mask.png"), record["left_known_mask"])
-        if "right_known_mask" in record:
-            save_image(os.path.join(step_dir, "22_right_known_mask.png"), record["right_known_mask"])
-        if "merge_composite" in record:
-            save_image(os.path.join(step_dir, "23_merge_composite.png"), record["merge_composite"])
+            for index_name, key in [
+                ("07", "distance"),
+                ("08", "edge"),
+                ("09", "color"),
+                ("10", "smoothness"),
+                ("11", "combined"),
+            ]:
+                save_image(
+                    os.path.join(step_dir, "{}_risk_{}.png".format(index_name, key)),
+                    record["risk_maps"][key] * 255.0,
+                )
+        for filename, key, scale in [
+            ("12_base_missing_mask.png", "base_missing_mask", 1.0),
+            ("13_warped_combined_risk.png", "warped_combined_risk", 255.0),
+            ("14_risk_selected_mask.png", "risk_selected_mask", 1.0),
+            ("15_remasked_mask.png", "remasked_mask", 1.0),
+            ("16_smoothed_mask.png", "smoothed_mask", 1.0),
+            ("17_warped.png", "warped", 1.0),
+            ("18_known_mask.png", "known_mask", 1.0),
+            ("19_left_warped.png", "left_warped", 1.0),
+            ("20_right_warped.png", "right_warped", 1.0),
+            ("21_left_known_mask.png", "left_known_mask", 1.0),
+            ("22_right_known_mask.png", "right_known_mask", 1.0),
+            ("23_merge_composite.png", "merge_composite", 1.0),
+        ]:
+            save_optional_image(record, step_dir, filename, key, scale=scale)
         for source_index, source in enumerate(record.get("overlap_sources", [])):
             prefix = "{:02d}_{}".format(source_index, source["name"])
             save_image(os.path.join(step_dir, "24_{}_warped.png".format(prefix)), source["warped"])
@@ -877,22 +880,31 @@ def save_pipeline_outputs_minimal(run_dir, artifacts):
 
 def save_pipeline_outputs_full(run_dir, artifacts):
     ensure_dir(run_dir)
-    save_json(os.path.join(run_dir, "00_config.json"), artifacts["config"])
-    save_text(os.path.join(run_dir, "01_prompt.txt"), artifacts["prompt"])
-    save_image(os.path.join(run_dir, "02_initial_view.png"), artifacts["initial_view"])
-    save_json(os.path.join(run_dir, "03_central_manifest.json"), artifacts["central_manifest"])
-    save_json(os.path.join(run_dir, "04_upward_manifest.json"), artifacts["upward_manifest"])
-    save_json(os.path.join(run_dir, "05_downward_manifest.json"), artifacts["downward_manifest"])
-    save_image(os.path.join(run_dir, "06_central_360_equirect.png"), artifacts["central_panorama"])
-    save_image(os.path.join(run_dir, "07_upward_partial_equirect.png"), artifacts["upward_panorama"])
-    save_image(os.path.join(run_dir, "08_downward_partial_equirect.png"), artifacts["downward_panorama"])
-    save_image(os.path.join(run_dir, "09_full_sphere_without_poles_equirect.png"), artifacts["pre_pole_panorama"])
-    save_image(os.path.join(run_dir, "10_top_pole_partial_equirect.png"), artifacts["top_pole_panorama"])
-    save_image(os.path.join(run_dir, "11_bottom_pole_partial_equirect.png"), artifacts["bottom_pole_panorama"])
-    save_image(os.path.join(run_dir, "12_full_sphere_equirect.png"), artifacts["full_panorama"])
-    save_image(os.path.join(run_dir, "13_full_sphere_coverage.png"), artifacts["full_coverage"])
-    save_json(os.path.join(run_dir, "14_pole_manifest.json"), artifacts["pole_manifest"])
-    save_text(os.path.join(run_dir, "15_pipeline_note.txt"), artifacts["pipeline_note"])
+    for filename, key in [
+        ("00_config.json", "config"),
+        ("03_central_manifest.json", "central_manifest"),
+        ("04_upward_manifest.json", "upward_manifest"),
+        ("05_downward_manifest.json", "downward_manifest"),
+        ("14_pole_manifest.json", "pole_manifest"),
+    ]:
+        save_json(os.path.join(run_dir, filename), artifacts[key])
+    for filename, key in [
+        ("01_prompt.txt", "prompt"),
+        ("15_pipeline_note.txt", "pipeline_note"),
+    ]:
+        save_text(os.path.join(run_dir, filename), artifacts[key])
+    for filename, key in [
+        ("02_initial_view.png", "initial_view"),
+        ("06_central_360_equirect.png", "central_panorama"),
+        ("07_upward_partial_equirect.png", "upward_panorama"),
+        ("08_downward_partial_equirect.png", "downward_panorama"),
+        ("09_full_sphere_without_poles_equirect.png", "pre_pole_panorama"),
+        ("10_top_pole_partial_equirect.png", "top_pole_panorama"),
+        ("11_bottom_pole_partial_equirect.png", "bottom_pole_panorama"),
+        ("12_full_sphere_equirect.png", "full_panorama"),
+        ("13_full_sphere_coverage.png", "full_coverage"),
+    ]:
+        save_image(os.path.join(run_dir, filename), artifacts[key])
 
     contact_images = []
     contact_labels = []
@@ -901,30 +913,18 @@ def save_pipeline_outputs_full(run_dir, artifacts):
         contact_labels.append(record["name"])
     build_contact_sheet(contact_images, contact_labels).save(os.path.join(run_dir, "16_all_view_contact_sheet.png"))
 
-    save_group_artifacts(
-        os.path.join(run_dir, "central"),
-        artifacts["central_records"],
-        artifacts["pano_width"],
-        artifacts["pano_height"],
-    )
-    save_group_artifacts(
-        os.path.join(run_dir, "upward"),
-        artifacts["upward_records"],
-        artifacts["pano_width"],
-        artifacts["pano_height"],
-    )
-    save_group_artifacts(
-        os.path.join(run_dir, "downward"),
-        artifacts["downward_records"],
-        artifacts["pano_width"],
-        artifacts["pano_height"],
-    )
-    save_group_artifacts(
-        os.path.join(run_dir, "poles"),
-        artifacts["pole_records"],
-        artifacts["pano_width"],
-        artifacts["pano_height"],
-    )
+    for folder, key in [
+        ("central", "central_records"),
+        ("upward", "upward_records"),
+        ("downward", "downward_records"),
+        ("poles", "pole_records"),
+    ]:
+        save_group_artifacts(
+            os.path.join(run_dir, folder),
+            artifacts[key],
+            artifacts["pano_width"],
+            artifacts["pano_height"],
+        )
 
 
 def build_view(base_view, yaw_deg, pitch_deg, fov_deg):
