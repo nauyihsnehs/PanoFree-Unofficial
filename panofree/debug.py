@@ -314,16 +314,10 @@ def save_phase4_group_artifacts(group_dir, records, pano_width, pano_height):
         if "smoothed_mask" in record:
             save_image(os.path.join(step_dir, "16_smoothed_mask.png"), record["smoothed_mask"])
 
-        if record["kind"] in ["seed", "step"]:
-            if "warped" in record:
-                save_image(os.path.join(step_dir, "17_warped.png"), record["warped"])
-            if "known_mask" in record:
-                save_image(os.path.join(step_dir, "18_known_mask.png"), record["known_mask"])
-        if record["kind"] == "merge":
-            if "warped" in record:
-                save_image(os.path.join(step_dir, "17_warped.png"), record["warped"])
-            if "known_mask" in record:
-                save_image(os.path.join(step_dir, "18_known_mask.png"), record["known_mask"])
+        if "warped" in record:
+            save_image(os.path.join(step_dir, "17_warped.png"), record["warped"])
+        if "known_mask" in record:
+            save_image(os.path.join(step_dir, "18_known_mask.png"), record["known_mask"])
 
         for source_index, source in enumerate(record.get("overlap_sources", [])):
             prefix = "{:02d}_{}".format(source_index, source["name"])
@@ -373,6 +367,60 @@ def save_phase4_debug_artifacts(run_dir, artifacts):
     save_phase4_group_artifacts(
         os.path.join(run_dir, "downward"),
         artifacts["downward_records"],
+        artifacts["pano_width"],
+        artifacts["pano_height"],
+    )
+
+
+def save_phase5_debug_artifacts(run_dir, artifacts):
+    ensure_dir(run_dir)
+
+    save_json(os.path.join(run_dir, "00_config.json"), artifacts["config"])
+    save_text(os.path.join(run_dir, "01_prompt.txt"), artifacts["prompt"])
+    save_json(os.path.join(run_dir, "02_central_manifest.json"), artifacts["central_manifest"])
+    save_json(os.path.join(run_dir, "03_upward_manifest.json"), artifacts["upward_manifest"])
+    save_json(os.path.join(run_dir, "04_downward_manifest.json"), artifacts["downward_manifest"])
+    save_json(os.path.join(run_dir, "05_pole_manifest.json"), artifacts["pole_manifest"])
+    save_image(os.path.join(run_dir, "06_central_360_equirect.png"), artifacts["central_panorama"])
+    save_image(os.path.join(run_dir, "07_upward_partial_equirect.png"), artifacts["upward_panorama"])
+    save_image(os.path.join(run_dir, "08_downward_partial_equirect.png"), artifacts["downward_panorama"])
+    save_image(os.path.join(run_dir, "09_full_sphere_without_poles_equirect.png"), artifacts["pre_pole_panorama"])
+    save_image(os.path.join(run_dir, "10_top_pole_partial_equirect.png"), artifacts["top_pole_panorama"])
+    save_image(os.path.join(run_dir, "11_bottom_pole_partial_equirect.png"), artifacts["bottom_pole_panorama"])
+    save_image(os.path.join(run_dir, "12_full_sphere_equirect.png"), artifacts["full_panorama"])
+    save_image(os.path.join(run_dir, "13_full_sphere_coverage.png"), artifacts["full_coverage"])
+
+    contact_images = []
+    contact_labels = []
+    for record in artifacts["central_records"] + artifacts["upward_records"] + artifacts["downward_records"] + artifacts["pole_records"]:
+        contact_images.append(Image.fromarray(record["image"], mode="RGB"))
+        contact_labels.append(record["name"])
+    build_contact_sheet(contact_images, contact_labels).save(
+        os.path.join(run_dir, "14_all_view_contact_sheet.png")
+    )
+    save_text(os.path.join(run_dir, "15_phase_note.txt"), artifacts["phase_note"])
+
+    save_phase4_group_artifacts(
+        os.path.join(run_dir, "central"),
+        artifacts["central_records"],
+        artifacts["pano_width"],
+        artifacts["pano_height"],
+    )
+    save_phase4_group_artifacts(
+        os.path.join(run_dir, "upward"),
+        artifacts["upward_records"],
+        artifacts["pano_width"],
+        artifacts["pano_height"],
+    )
+    save_phase4_group_artifacts(
+        os.path.join(run_dir, "downward"),
+        artifacts["downward_records"],
+        artifacts["pano_width"],
+        artifacts["pano_height"],
+    )
+    save_phase4_group_artifacts(
+        os.path.join(run_dir, "poles"),
+        artifacts["pole_records"],
         artifacts["pano_width"],
         artifacts["pano_height"],
     )
