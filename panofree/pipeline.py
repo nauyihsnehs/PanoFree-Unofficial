@@ -120,6 +120,23 @@ def create_generator(seed, device=None):
     return make_torch_generator(torch, device, seed)
 
 
+def build_noise_latents(pipe, torch, image_shape, generator, device, dtype, variance_multiplier):
+    if variance_multiplier is None or abs(float(variance_multiplier) - 1.0) <= 1e-8:
+        return None
+    height = image_shape[0]
+    width = image_shape[1]
+    scale_factor = getattr(pipe, "vae_scale_factor", 8)
+    latent_channels = getattr(pipe.vae.config, "latent_channels", 4)
+    shape = (
+        1,
+        latent_channels,
+        height // scale_factor,
+        width // scale_factor,
+    )
+    latents = torch.randn(shape, generator=generator, device=device, dtype=dtype)
+    return latents * float(variance_multiplier) ** 0.5
+
+
 def generate_initial_view(config, generator=None):
     prompt = config["prompt"]
     generation_config = config["generation"]
@@ -148,7 +165,7 @@ def run_inpaint(prompt, init_image, mask_image, config):
     )
 
 
-def run_guided_inpaint(prompt, init_image, mask_image, guidance_image, config, generator=None, strength=None):
+def run_guided_inpaint(prompt, init_image, mask_image, guidance_image, config, generator=None, strength=None, guidance_scale=None, noise_variance_multiplier=None):
     inpaint_config = config["inpaint"]
     pipe, torch, device = load_inpaint_pipeline(config["models"]["inpaint_model"])
     if generator is None:
@@ -160,15 +177,28 @@ def run_guided_inpaint(prompt, init_image, mask_image, guidance_image, config, g
 
     if strength is None:
         strength = inpaint_config.get("strength", 1.0)
+    if guidance_scale is None:
+        guidance_scale = inpaint_config.get("guidance_scale", 7.5)
+
+    latents = build_noise_latents(
+        pipe,
+        torch,
+        image.shape,
+        generator,
+        device,
+        pipe.unet.dtype,
+        noise_variance_multiplier,
+    )
 
     result = pipe(
         prompt=prompt,
         image=image_to_pil(image),
         mask_image=image_to_pil(mask_image),
         num_inference_steps=inpaint_config.get("num_inference_steps", 50),
-        guidance_scale=inpaint_config.get("guidance_scale", 7.5),
+        guidance_scale=guidance_scale,
         generator=generator,
         strength=strength,
+        latents=latents,
     )
     return image, pil_to_array(result.images[0])
 

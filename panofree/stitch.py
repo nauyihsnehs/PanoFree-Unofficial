@@ -1,6 +1,6 @@
 import numpy as np
 
-from .camera import build_intrinsics, build_view_rotation, equirectangular_to_world_rays
+from .camera import build_intrinsics, build_view_rotation, equirectangular_to_world_rays, pixels_to_camera_rays, world_rays_to_equirectangular
 
 
 def build_boundary_weight_map(width, height):
@@ -70,15 +70,57 @@ def sample_view_to_equirectangular(image, view, pano_width, pano_height):
     return sampled, valid.astype(np.uint8) * 255, sampled_weight
 
 
+def sample_equirectangular_to_view(canvas, view, coverage=None):
+    try:
+        import cv2
+    except ImportError as exc:
+        raise RuntimeError(
+            "OpenCV is required for stitching. Install `opencv-python` before running Phase 4."
+        ) from exc
+
+    intrinsics = build_intrinsics(view["width"], view["height"], view["fov_deg"])
+    rotation = build_view_rotation(view)
+    camera_rays = pixels_to_camera_rays(view["width"], view["height"], intrinsics)
+    world_rays = camera_rays @ rotation.T
+    map_x, map_y = world_rays_to_equirectangular(
+        world_rays,
+        canvas.shape[1],
+        canvas.shape[0],
+    )
+    sampled = cv2.remap(
+        canvas,
+        map_x.astype(np.float32),
+        map_y.astype(np.float32),
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_WRAP,
+    )
+    if coverage is None:
+        known_mask = np.ones((view["height"], view["width"]), dtype=np.uint8) * 255
+    else:
+        known_mask = cv2.remap(
+            coverage.astype(np.uint8),
+            map_x.astype(np.float32),
+            map_y.astype(np.float32),
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_WRAP,
+        )
+        known_mask = np.where(known_mask >= 127.5, 255, 0).astype(np.uint8)
+    missing_mask = np.where(known_mask > 0, 0, 255).astype(np.uint8)
+    return sampled, known_mask, missing_mask
+
+
 def stitch_equirectangular_views(view_records, pano_width, pano_height, pitch_min_deg, pitch_max_deg):
     canvas_sum = np.zeros((pano_height, pano_width, 3), dtype=np.float32)
     weight_sum = np.zeros((pano_height, pano_width), dtype=np.float32)
     coverage = np.zeros((pano_height, pano_width), dtype=np.uint8)
 
-    pitch_min_v = int(round((0.5 - pitch_max_deg / 180.0) * (pano_height - 1)))
-    pitch_max_v = int(round((0.5 - pitch_min_deg / 180.0) * (pano_height - 1)))
     row_mask = np.zeros((pano_height, pano_width), dtype=bool)
-    row_mask[max(pitch_min_v, 0):min(pitch_max_v + 1, pano_height), :] = True
+    if pitch_min_deg is None or pitch_max_deg is None:
+        row_mask[:, :] = True
+    else:
+        pitch_min_v = int(round((0.5 - pitch_max_deg / 180.0) * (pano_height - 1)))
+        pitch_max_v = int(round((0.5 - pitch_min_deg / 180.0) * (pano_height - 1)))
+        row_mask[max(pitch_min_v, 0):min(pitch_max_v + 1, pano_height), :] = True
 
     for record in view_records:
         sampled, valid_mask, sampled_weight = sample_view_to_equirectangular(

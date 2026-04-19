@@ -1,0 +1,68 @@
+{
+  "prompt": "A cozy mountain village street under a blue sky with scattered clouds.",
+  "seed": 1234,
+  "models": {
+    "base_model": "stabilityai/stable-diffusion-2-1-base",
+    "inpaint_model": "stabilityai/stable-diffusion-2-inpainting"
+  },
+  "input": {
+    "source_image": ""
+  },
+  "source_view": {
+    "yaw_deg": 0.0,
+    "pitch_deg": 0.0,
+    "fov_deg": 80.0,
+    "width": 512,
+    "height": 512
+  },
+  "generation": {
+    "num_inference_steps": 50,
+    "guidance_scale": 7.5
+  },
+  "inpaint": {
+    "num_inference_steps": 50,
+    "guidance_scale": 7.5,
+    "strength": 0.98
+  },
+  "central_band": {
+    "fov_deg": 80.0,
+    "pitch_deg": 0.0,
+    "yaw_stride_deg": 40.0,
+    "steps_each_direction": 3,
+    "merge_yaw_deg": 180.0,
+    "sdedit_t0": 0.98,
+    "stitch_pitch_min_deg": -40.0,
+    "stitch_pitch_max_deg": 40.0,
+    "risk_weights": [0.8, 0.2, 0.0, 0.0],
+    "erase_ratio": 0.05,
+    "risk_gaussian_kernel": 9,
+    "risk_gaussian_sigma": 2.0,
+    "mask_median_kernel": 5,
+    "mask_dilate_kernel": 3,
+    "mask_dilate_iterations": 1,
+    "risk_fallback_threshold": 0.5
+  },
+  "expansion": {
+    "pitch_offset_deg": 25.0,
+    "fov_deg": 110.0,
+    "yaw_stride_deg": 80.0,
+    "steps_per_direction": 3,
+    "sdedit_t0": 0.9,
+    "guidance_scale": 2.0,
+    "noise_variance_multiplier": 1.05,
+    "risk_weights": [0.6, 0.2, 0.1, 0.1],
+    "erase_ratio": 0.1,
+    "prior_crop_ratio": 0.3333333333,
+    "risk_gaussian_kernel": 9,
+    "risk_gaussian_sigma": 2.0,
+    "mask_median_kernel": 5,
+    "mask_dilate_kernel": 3,
+    "mask_dilate_iterations": 1,
+    "risk_fallback_threshold": 0.5
+  },
+  "output": {
+    "run_dir": "outputs/phase4/example_run",
+    "pano_width": 4096,
+    "pano_height": 2048
+  }
+}

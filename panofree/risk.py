@@ -113,9 +113,11 @@ def compute_combined_risk(risk_maps, weights):
     return normalize_map(combined)
 
 
-def compute_view_risk_maps(record, context_records, config, initial_center):
-    kernel = config["central_band"]["risk_gaussian_kernel"]
-    sigma = config["central_band"]["risk_gaussian_sigma"]
+def compute_view_risk_maps(record, context_records, config, initial_center, risk_config=None):
+    if risk_config is None:
+        risk_config = config["central_band"]
+    kernel = risk_config["risk_gaussian_kernel"]
+    sigma = risk_config["risk_gaussian_sigma"]
     pano_width = config["output"]["pano_width"]
     pano_height = config["output"]["pano_height"]
     context_images = [item["image"] for item in context_records]
@@ -128,7 +130,7 @@ def compute_view_risk_maps(record, context_records, config, initial_center):
     }
     risk_maps["combined"] = compute_combined_risk(
         risk_maps,
-        config["central_band"]["risk_weights"],
+        risk_config["risk_weights"],
     )
     return risk_maps
 
