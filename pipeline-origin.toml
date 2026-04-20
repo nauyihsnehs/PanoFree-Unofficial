@@ -1,5 +1,5 @@
-#prompt = "Cozy log cabin with a stone fireplace and rustic wooden furniture"
-prompt = "Yoga studio with bamboo floors and serene décor"
+prompt = "Cozy log cabin with a stone fireplace and rustic wooden furniture"
+#prompt = "Yoga studio with bamboo floors and serene décor"
 #prompt = "Desert oasis with palm trees and a shimmering pool"
 #prompt = "Crystal-clear mountain lake reflecting snow-capped peaks"
 seed = 1234
@@ -50,9 +50,9 @@ pitch_offset_deg = 25.0
 fov_deg = 110.0
 yaw_stride_deg = 80.0
 steps_per_direction = 3
-sdedit_t0 = 0.84
-guidance_scale = 4.5
-noise_variance_multiplier = 1.00
+sdedit_t0 = 0.90
+guidance_scale = 2.0
+noise_variance_multiplier = 1.05
 risk_weights = [0.6, 0.2, 0.1, 0.1]
 erase_ratio = 0.10
 prior_crop_ratio = 0.3333333333
@@ -65,9 +65,9 @@ risk_fallback_threshold = 0.5
 
 [pole_closure]
 fov_deg = 90.0
-sdedit_t0 = 0.82
-guidance_scale = 3.5
-noise_variance_multiplier = 1.00
+sdedit_t0 = 0.90
+guidance_scale = 1.0
+noise_variance_multiplier = 1.10
 risk_weights = [0.6, 0.2, 0.1, 0.1]
 erase_ratio = 0.20
 prior_crop_ratio = 0.3333333333
