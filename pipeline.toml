@@ -1,7 +1,7 @@
 #prompt = "Cozy log cabin with a stone fireplace and rustic wooden furniture"
-prompt = "Yoga studio with bamboo floors and serene décor"
+#prompt = "Yoga studio with bamboo floors and serene décor"
 #prompt = "Desert oasis with palm trees and a shimmering pool"
-#prompt = "Crystal-clear mountain lake reflecting snow-capped peaks"
+prompt = "Crystal-clear mountain lake reflecting snow-capped peaks"
 seed = 1234
 
 [models]
