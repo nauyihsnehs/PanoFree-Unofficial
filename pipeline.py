@@ -44,11 +44,8 @@ def generate_or_load_initial_view(config, generator):
     return helper.generate_initial_view(config, generator=generator), False
 
 
-def find_record(view_records, name):
-    for record in view_records:
-        if record["name"] == name:
-            return record
-    raise RuntimeError("Missing view record: {}".format(name))
+def build_record_index(records):
+    return {r["name"]: r for r in records}
 
 
 def build_steps_manifest(view_records):
@@ -69,14 +66,12 @@ def build_steps_manifest(view_records):
 
 def build_central_schedule(config):
     stride = config["central_band"]["yaw_stride_deg"]
-    return [
-        {"name": "x1", "yaw_deg": stride, "direction": 1, "step_index": 1},
-        {"name": "x-1", "yaw_deg": -stride, "direction": -1, "step_index": 1},
-        {"name": "x2", "yaw_deg": stride * 2.0, "direction": 1, "step_index": 2},
-        {"name": "x-2", "yaw_deg": -stride * 2.0, "direction": -1, "step_index": 2},
-        {"name": "x3", "yaw_deg": stride * 3.0, "direction": 1, "step_index": 3},
-        {"name": "x-3", "yaw_deg": -stride * 3.0, "direction": -1, "step_index": 3},
-    ]
+    steps = config["central_band"]["steps_each_direction"]
+    schedule = []
+    for i in range(1, steps + 1):
+        schedule.append({"name": f"x{i}", "yaw_deg": stride * i, "direction": 1, "step_index": i})
+        schedule.append({"name": f"x-{i}", "yaw_deg": -stride * i, "direction": -1, "step_index": i})
+    return schedule
 
 
 def compute_initial_risks(config, initial_record):
@@ -126,160 +121,82 @@ def build_merge_composite(left_warped, right_warped, left_known_mask, right_know
     composite[left_only] = left_warped[left_only]
     composite[right_only] = right_warped[right_only]
     composite[both] = (
-        (left_warped[both].astype(np.float32) + right_warped[both].astype(np.float32)) * 0.5
+            (left_warped[both].astype(np.float32) + right_warped[both].astype(np.float32)) * 0.5
     ).astype(np.uint8)
     missing_mask = np.where(left_valid | right_valid, 0, 255).astype(np.uint8)
     return composite, missing_mask
 
 
+class InpaintStep:
+    """Unified inpainting step executor for central, expansion, and pole targets."""
+
+    def __init__(self, config, generator, initial_center):
+        self.config = config
+        self.generator = generator
+        self.initial_center = initial_center
+
+    def run(self, target_view, composite_bundle, guidance_image, risk_config_key, record_name, record_kind, context_records, extra_fields=None):
+        """Execute the shared inpainting workflow."""
+        risk_config = self.config[risk_config_key]
+        selected_mask, remasked_mask, smoothed_mask = build_risk_masks(
+            composite_bundle["base_missing_mask"], composite_bundle["known_mask"],
+            composite_bundle["warped_combined_risk"], risk_config)
+        inpaint_input = build_inpaint_input(composite_bundle["composite"], smoothed_mask)
+        guided_input, output_image = helper.run_guided_inpaint(
+            self.config["prompt"], inpaint_input, smoothed_mask, guidance_image,
+            self.config, generator=self.generator, strength=risk_config["sdedit_t0"],
+            guidance_scale=risk_config.get("guidance_scale"), noise_variance_multiplier=risk_config.get("noise_variance_multiplier"))
+        record = {
+            "name": record_name, "kind": record_kind, "view": target_view, "image": output_image,
+            "guidance_image": guidance_image, "guided_input": guided_input,
+            "base_missing_mask": composite_bundle["base_missing_mask"],
+            "known_mask": composite_bundle["known_mask"],
+            "warped_combined_risk": composite_bundle["warped_combined_risk"],
+            "risk_selected_mask": selected_mask, "remasked_mask": remasked_mask,
+            "smoothed_mask": smoothed_mask, "missing_mask": smoothed_mask,
+        }
+        if extra_fields:
+            record.update(extra_fields)
+        record["risk_maps"] = helper.compute_view_risk_maps(
+            record, context_records + [record], self.config, self.initial_center, risk_config)
+        return record
+
+
 def run_central_step(config, step_spec, view_records, generator, initial_center):
-    step_index = step_spec["step_index"]
-    direction = step_spec["direction"]
-    source_name = "x0" if step_index == 1 else "{}{}".format("x" if direction > 0 else "x-", step_index - 1)
-    guidance_name = "x0" if step_index == 1 else ("x-{}".format(step_index - 1) if direction > 0 else "x{}".format(step_index - 1))
-    source_record = find_record(view_records, source_name)
-    guidance_record = find_record(view_records, guidance_name)
-    target_view = build_view(
-        config["source_view"],
-        step_spec["yaw_deg"],
-        config["central_band"]["pitch_deg"],
-        config["central_band"]["fov_deg"],
-    )
-    homography = helper.build_view_homography(source_record["view"], target_view)
-    warped, known_mask, base_missing_mask = helper.warp_image_and_mask(
-        source_record["image"],
-        homography,
-        (target_view["width"], target_view["height"]),
-    )
-    warped_combined_risk = helper.warp_risk_map(
-        source_record["risk_maps"]["combined"],
-        homography,
-        (target_view["width"], target_view["height"]),
-    )
-    selected_mask, remasked_mask, smoothed_mask = build_risk_masks(
-        base_missing_mask,
-        known_mask,
-        warped_combined_risk,
-        config["central_band"],
-    )
-    inpaint_input = build_inpaint_input(warped, smoothed_mask)
-    guided_input, inpaint_output = helper.run_guided_inpaint(
-        config["prompt"],
-        inpaint_input,
-        smoothed_mask,
-        guidance_record["image"],
-        config,
-        generator=generator,
-        strength=config["central_band"]["sdedit_t0"],
-    )
-    record = {
-        "name": step_spec["name"],
-        "kind": "step",
-        "view": target_view,
-        "image": inpaint_output,
-        "source_name": source_name,
-        "guidance_name": guidance_name,
-        "guidance_image": guidance_record["image"],
-        "guided_input": guided_input,
-        "warped": warped,
-        "known_mask": known_mask,
-        "base_missing_mask": base_missing_mask,
-        "risk_selected_mask": selected_mask,
-        "remasked_mask": remasked_mask,
-        "smoothed_mask": smoothed_mask,
-        "missing_mask": smoothed_mask,
-        "warped_combined_risk": warped_combined_risk,
-    }
-    record["risk_maps"] = helper.compute_view_risk_maps(
-        record,
-        view_records + [record],
-        config,
-        initial_center,
-        config["central_band"],
-    )
-    return record
+    step_index, direction = step_spec["step_index"], step_spec["direction"]
+    source_name = "x0" if step_index == 1 else f"{'x' if direction > 0 else 'x-'}{step_index - 1}"
+    guidance_name = "x0" if step_index == 1 else (f"x-{step_index - 1}" if direction > 0 else f"x{step_index - 1}")
+    idx = build_record_index(view_records)
+    target_view = build_view(config["source_view"], step_spec["yaw_deg"], config["central_band"]["pitch_deg"], config["central_band"]["fov_deg"])
+    homography = helper.build_view_homography(idx[source_name]["view"], target_view)
+    warped, known_mask, base_missing_mask = helper.warp_image_and_mask(idx[source_name]["image"], homography, (target_view["width"], target_view["height"]))
+    warped_combined_risk = helper.warp_risk_map(idx[source_name]["risk_maps"]["combined"], homography, (target_view["width"], target_view["height"]))
+    composite_bundle = {"composite": warped, "base_missing_mask": base_missing_mask, "known_mask": known_mask, "warped_combined_risk": warped_combined_risk}
+    return InpaintStep(config, generator, initial_center).run(
+        target_view, composite_bundle, idx[guidance_name]["image"], "central_band",
+        step_spec["name"], "step", view_records,
+        {"source_name": source_name, "guidance_name": guidance_name, "warped": warped})
 
 
 def run_central_merge(config, view_records, generator, initial_center):
-    left_record = find_record(view_records, "x3")
-    right_record = find_record(view_records, "x-3")
-    guidance_record = find_record(view_records, "x0")
-    target_view = build_view(
-        config["source_view"],
-        config["central_band"]["merge_yaw_deg"],
-        config["central_band"]["pitch_deg"],
-        config["central_band"]["fov_deg"],
-    )
-    left_h = helper.build_view_homography(left_record["view"], target_view)
-    right_h = helper.build_view_homography(right_record["view"], target_view)
-    left_warped, left_known_mask, _ = helper.warp_image_and_mask(
-        left_record["image"],
-        left_h,
-        (target_view["width"], target_view["height"]),
-    )
-    right_warped, right_known_mask, _ = helper.warp_image_and_mask(
-        right_record["image"],
-        right_h,
-        (target_view["width"], target_view["height"]),
-    )
-    merge_composite, base_missing_mask = build_merge_composite(
-        left_warped,
-        right_warped,
-        left_known_mask,
-        right_known_mask,
-    )
-    left_warped_risk = helper.warp_risk_map(left_record["risk_maps"]["combined"], left_h, (target_view["width"], target_view["height"]))
-    right_warped_risk = helper.warp_risk_map(right_record["risk_maps"]["combined"], right_h, (target_view["width"], target_view["height"]))
-    warped_combined_risk = helper.merge_warped_risks(
-        left_warped_risk,
-        right_warped_risk,
-        left_known_mask,
-        right_known_mask,
-    )
+    idx = build_record_index(view_records)
+    target_view = build_view(config["source_view"], config["central_band"]["merge_yaw_deg"], config["central_band"]["pitch_deg"], config["central_band"]["fov_deg"])
+    left_h = helper.build_view_homography(idx["x3"]["view"], target_view)
+    right_h = helper.build_view_homography(idx["x-3"]["view"], target_view)
+    left_warped, left_known_mask, _ = helper.warp_image_and_mask(idx["x3"]["image"], left_h, (target_view["width"], target_view["height"]))
+    right_warped, right_known_mask, _ = helper.warp_image_and_mask(idx["x-3"]["image"], right_h, (target_view["width"], target_view["height"]))
+    merge_composite, base_missing_mask = build_merge_composite(left_warped, right_warped, left_known_mask, right_known_mask)
+    left_warped_risk = helper.warp_risk_map(idx["x3"]["risk_maps"]["combined"], left_h, (target_view["width"], target_view["height"]))
+    right_warped_risk = helper.warp_risk_map(idx["x-3"]["risk_maps"]["combined"], right_h, (target_view["width"], target_view["height"]))
+    warped_combined_risk = helper.merge_warped_risks(left_warped_risk, right_warped_risk, left_known_mask, right_known_mask)
     known_mask = np.where((left_known_mask > 0) | (right_known_mask > 0), 255, 0).astype(np.uint8)
-    selected_mask, remasked_mask, smoothed_mask = build_risk_masks(base_missing_mask, known_mask, warped_combined_risk, config["central_band"])
-    inpaint_input = build_inpaint_input(merge_composite, smoothed_mask)
-    guided_input, inpaint_output = helper.run_guided_inpaint(
-        config["prompt"],
-        inpaint_input,
-        smoothed_mask,
-        guidance_record["image"],
-        config,
-        generator=generator,
-        strength=config["central_band"]["sdedit_t0"],
-    )
-    record = {
-        "name": "x_merge",
-        "kind": "merge",
-        "view": target_view,
-        "image": inpaint_output,
-        "source_name": "x3+x-3",
-        "guidance_name": "x0",
-        "guidance_image": guidance_record["image"],
-        "guided_input": guided_input,
-        "left_warped": left_warped,
-        "right_warped": right_warped,
-        "left_known_mask": left_known_mask,
-        "right_known_mask": right_known_mask,
-        "left_warped_risk": left_warped_risk,
-        "right_warped_risk": right_warped_risk,
-        "merge_composite": merge_composite,
-        "base_missing_mask": base_missing_mask,
-        "known_mask": known_mask,
-        "warped_combined_risk": warped_combined_risk,
-        "risk_selected_mask": selected_mask,
-        "remasked_mask": remasked_mask,
-        "smoothed_mask": smoothed_mask,
-        "missing_mask": smoothed_mask,
-    }
-    record["risk_maps"] = helper.compute_view_risk_maps(
-        record,
-        view_records + [record],
-        config,
-        initial_center,
-        config["central_band"],
-    )
-    return record
+    composite_bundle = {"composite": merge_composite, "base_missing_mask": base_missing_mask, "known_mask": known_mask, "warped_combined_risk": warped_combined_risk}
+    return InpaintStep(config, generator, initial_center).run(
+        target_view, composite_bundle, idx["x0"]["image"], "central_band",
+        "x_merge", "merge", view_records,
+        {"source_name": "x3+x-3", "guidance_name": "x0", "left_warped": left_warped, "right_warped": right_warped,
+         "left_known_mask": left_known_mask, "right_known_mask": right_known_mask,
+         "left_warped_risk": left_warped_risk, "right_warped_risk": right_warped_risk, "merge_composite": merge_composite})
 
 
 def build_prior_crop(image, width, height, use_top, crop_ratio):
@@ -343,83 +260,15 @@ def build_target_from_overlaps(target_view, completed_records):
     }
 
 
-def create_expansion_record(name, kind, target_view, output_image, guidance_name, guidance_image, guided_input, composite_bundle, selected_mask, remasked_mask, smoothed_mask):
-    return {
-        "name": name,
-        "kind": kind,
-        "view": target_view,
-        "image": output_image,
-        "source_name": ",".join([item["name"] for item in composite_bundle["overlap_sources"]]),
-        "guidance_name": guidance_name,
-        "guidance_image": guidance_image,
-        "guided_input": guided_input,
-        "warped": composite_bundle["composite"],
-        "known_mask": composite_bundle["known_mask"],
-        "base_missing_mask": composite_bundle["base_missing_mask"],
-        "risk_selected_mask": selected_mask,
-        "remasked_mask": remasked_mask,
-        "smoothed_mask": smoothed_mask,
-        "missing_mask": smoothed_mask,
-        "warped_combined_risk": composite_bundle["warped_combined_risk"],
-        "overlap_source_names": [item["name"] for item in composite_bundle["overlap_sources"]],
-        "overlap_sources": composite_bundle["overlap_sources"],
-    }
-
-
 def run_expansion_target(config, name, kind, yaw_deg, pitch_deg, completed_records, risk_context_records, generator, initial_center, use_top):
     target_view = build_view(config["source_view"], yaw_deg, pitch_deg, config["expansion"]["fov_deg"])
     composite_bundle = build_target_from_overlaps(target_view, completed_records)
-    guidance_name = {
-        "u0": "x0",
-        "u1": "u0",
-        "u-1": "u1",
-        "u_merge": "x_merge",
-        "d0": "x0",
-        "d1": "d0",
-        "d-1": "d1",
-        "d_merge": "x_merge",
-    }[name]
-    guidance_record = find_record(completed_records, guidance_name)
-    guidance_image = build_prior_crop(guidance_record["image"], target_view["width"], target_view["height"], use_top, config["expansion"]["prior_crop_ratio"])
-    selected_mask, remasked_mask, smoothed_mask = build_risk_masks(
-        composite_bundle["base_missing_mask"],
-        composite_bundle["known_mask"],
-        composite_bundle["warped_combined_risk"],
-        config["expansion"],
-    )
-    inpaint_input = build_inpaint_input(composite_bundle["composite"], smoothed_mask)
-    guided_input, output_image = helper.run_guided_inpaint(
-        config["prompt"],
-        inpaint_input,
-        smoothed_mask,
-        guidance_image,
-        config,
-        generator=generator,
-        strength=config["expansion"]["sdedit_t0"],
-        guidance_scale=config["expansion"]["guidance_scale"],
-        noise_variance_multiplier=config["expansion"]["noise_variance_multiplier"],
-    )
-    record = create_expansion_record(
-        name,
-        kind,
-        target_view,
-        output_image,
-        guidance_name,
-        guidance_image,
-        guided_input,
-        composite_bundle,
-        selected_mask,
-        remasked_mask,
-        smoothed_mask,
-    )
-    record["risk_maps"] = helper.compute_view_risk_maps(
-        record,
-        risk_context_records + [record],
-        config,
-        initial_center,
-        config["expansion"],
-    )
-    return record
+    guidance_name_map = {"u0": "x0", "u1": "u0", "u-1": "u1", "u_merge": "x_merge", "d0": "x0", "d1": "d0", "d-1": "d1", "d_merge": "x_merge"}
+    guidance_name = guidance_name_map[name]
+    guidance_image = build_prior_crop(build_record_index(completed_records)[guidance_name]["image"], target_view["width"], target_view["height"], use_top, config["expansion"]["prior_crop_ratio"])
+    extra = {"source_name": ",".join([s["name"] for s in composite_bundle["overlap_sources"]]), "guidance_name": guidance_name,
+             "overlap_source_names": [s["name"] for s in composite_bundle["overlap_sources"]], "overlap_sources": composite_bundle["overlap_sources"]}
+    return InpaintStep(config, generator, initial_center).run(target_view, composite_bundle, guidance_image, "expansion", name, kind, risk_context_records, extra)
 
 
 def run_expansion_ring(config, prefix, pitch_deg, central_records, upward_records, downward_records, generator, initial_center, use_top):
@@ -479,187 +328,59 @@ def run_pole_target(config, name, pitch_deg, completed_records, risk_context_rec
     composite_bundle = build_target_from_overlaps(target_view, completed_records)
     guidance_record = find_nearest_pole_record(guidance_records, 0.0, pitch_deg)
     guidance_image = build_prior_crop(guidance_record["image"], target_view["width"], target_view["height"], use_top, config["pole_closure"]["prior_crop_ratio"])
-    selected_mask, remasked_mask, smoothed_mask = build_risk_masks(
-        composite_bundle["base_missing_mask"],
-        composite_bundle["known_mask"],
-        composite_bundle["warped_combined_risk"],
-        config["pole_closure"],
-    )
-    inpaint_input = build_inpaint_input(composite_bundle["composite"], smoothed_mask)
-    guided_input, output_image = helper.run_guided_inpaint(
-        config["prompt"],
-        inpaint_input,
-        smoothed_mask,
-        guidance_image,
-        config,
-        generator=generator,
-        strength=config["pole_closure"]["sdedit_t0"],
-        guidance_scale=config["pole_closure"]["guidance_scale"],
-        noise_variance_multiplier=config["pole_closure"]["noise_variance_multiplier"],
-    )
-    record = create_expansion_record(
-        name,
-        "pole",
-        target_view,
-        output_image,
-        guidance_record["name"],
-        guidance_image,
-        guided_input,
-        composite_bundle,
-        selected_mask,
-        remasked_mask,
-        smoothed_mask,
-    )
-    record["risk_maps"] = helper.compute_view_risk_maps(
-        record,
-        risk_context_records + [record],
-        config,
-        initial_center,
-        config["pole_closure"],
-    )
-    return record
+    extra = {"source_name": ",".join([s["name"] for s in composite_bundle["overlap_sources"]]), "guidance_name": guidance_record["name"],
+             "overlap_source_names": [s["name"] for s in composite_bundle["overlap_sources"]], "overlap_sources": composite_bundle["overlap_sources"]}
+    return InpaintStep(config, generator, initial_center).run(target_view, composite_bundle, guidance_image, "pole_closure", name, "pole", risk_context_records, extra)
 
 
 def run_pipeline(config_path):
     config = helper.load_pipeline_config(config_path)
     config["output"]["run_dir"] = build_timestamped_run_dir(config["output"]["run_dir"])
-
     device = "cuda" if helper.torch.cuda.is_available() else "cpu"
-    generator = helper.make_torch_generator(helper.torch, device, config.get("seed"))
+    generator = helper.make_torch_generator(device, config.get("seed"))
+    w, h = config["output"]["pano_width"], config["output"]["pano_height"]
+
     initial_view, source_image_used = generate_or_load_initial_view(config, generator)
-    initial_record = {
-        "name": "x0",
-        "kind": "initial",
-        "view": copy.deepcopy(config["source_view"]),
-        "image": initial_view,
-    }
+    initial_record = {"name": "x0", "kind": "initial", "view": copy.deepcopy(config["source_view"]), "image": initial_view}
     initial_center = compute_initial_risks(config, initial_record)
 
+    # Central band
     central_records = [initial_record]
-    for step_spec in build_central_schedule(config):
-        central_records.append(run_central_step(config, step_spec, central_records, generator, initial_center))
+    for spec in build_central_schedule(config):
+        central_records.append(run_central_step(config, spec, central_records, generator, initial_center))
     central_records.append(run_central_merge(config, central_records, generator, initial_center))
 
-    central_panorama, _ = helper.stitch_equirectangular_views(
-        central_records,
-        config["output"]["pano_width"],
-        config["output"]["pano_height"],
-        config["central_band"]["stitch_pitch_min_deg"],
-        config["central_band"]["stitch_pitch_max_deg"],
-    )
+    # Expansion rings
+    upward_records = run_expansion_ring(config, "u", config["expansion"]["pitch_offset_deg"], central_records, [], [], generator, initial_center, True)
+    downward_records = run_expansion_ring(config, "d", -config["expansion"]["pitch_offset_deg"], central_records, upward_records, [], generator, initial_center, False)
 
-    upward_records = run_expansion_ring(
-        config,
-        "u",
-        config["expansion"]["pitch_offset_deg"],
-        central_records,
-        [],
-        [],
-        generator,
-        initial_center,
-        True,
-    )
-    downward_records = run_expansion_ring(
-        config,
-        "d",
-        -config["expansion"]["pitch_offset_deg"],
-        central_records,
-        upward_records,
-        [],
-        generator,
-        initial_center,
-        False,
-    )
-
-    upward_panorama, _ = helper.stitch_equirectangular_views(
-        upward_records,
-        config["output"]["pano_width"],
-        config["output"]["pano_height"],
-        None,
-        None,
-    )
-    downward_panorama, _ = helper.stitch_equirectangular_views(
-        downward_records,
-        config["output"]["pano_width"],
-        config["output"]["pano_height"],
-        None,
-        None,
-    )
-
+    # Pole closure
     pre_pole_records = central_records + upward_records + downward_records
-    pre_pole_panorama, _ = helper.stitch_equirectangular_views(
-        pre_pole_records,
-        config["output"]["pano_width"],
-        config["output"]["pano_height"],
-        None,
-        None,
-    )
-
-    top_pole_record = run_pole_target(
-        config,
-        "top_pole",
-        90.0,
-        pre_pole_records,
-        upward_records,
-        upward_records,
-        generator,
-        initial_center,
-        True,
-    )
-    bottom_pole_record = run_pole_target(
-        config,
-        "bottom_pole",
-        -90.0,
-        pre_pole_records,
-        downward_records,
-        downward_records,
-        generator,
-        initial_center,
-        False,
-    )
+    top_pole_record = run_pole_target(config, "top_pole", 90.0, pre_pole_records, upward_records, upward_records, generator, initial_center, True)
+    bottom_pole_record = run_pole_target(config, "bottom_pole", -90.0, pre_pole_records, downward_records, downward_records, generator, initial_center, False)
     pole_records = [top_pole_record, bottom_pole_record]
 
-    top_pole_panorama, _ = helper.stitch_equirectangular_views(
-        [top_pole_record],
-        config["output"]["pano_width"],
-        config["output"]["pano_height"],
-        None,
-        None,
-    )
-    bottom_pole_panorama, _ = helper.stitch_equirectangular_views(
-        [bottom_pole_record],
-        config["output"]["pano_width"],
-        config["output"]["pano_height"],
-        None,
-        None,
-    )
-    full_panorama, full_coverage = helper.stitch_equirectangular_views(
-        pre_pole_records + pole_records,
-        config["output"]["pano_width"],
-        config["output"]["pano_height"],
-        None,
-        None,
-    )
+    # Stitching
+    def stitch(records, pitch_min=None, pitch_max=None):
+        return helper.stitch_equirectangular_views(records, w, h, pitch_min, pitch_max)
+
+    central_panorama, _ = stitch(central_records, config["central_band"]["stitch_pitch_min_deg"], config["central_band"]["stitch_pitch_max_deg"])
+    upward_panorama, _ = stitch(upward_records)
+    downward_panorama, _ = stitch(downward_records)
+    pre_pole_panorama, _ = stitch(pre_pole_records)
+    top_pole_panorama, _ = stitch([top_pole_record])
+    bottom_pole_panorama, _ = stitch([bottom_pole_record])
+    full_panorama, full_coverage = stitch(pre_pole_records + pole_records)
 
     uncovered_pixels = int((full_coverage <= 0).sum())
     expected_result_reached = uncovered_pixels == 0
-    if expected_result_reached:
-        pipeline_note = "Pipeline reached its expected result: final full spherical panorama was produced end-to-end with top and bottom poles closed."
-    else:
-        pipeline_note = "Pipeline did not reach its expected result: final full-sphere coverage still has {} uncovered pixels.".format(int(uncovered_pixels))
+    pipeline_note = "Pipeline reached its expected result: final full spherical panorama was produced end-to-end with top and bottom poles closed." if expected_result_reached else f"Pipeline did not reach its expected result: final full-sphere coverage still has {uncovered_pixels} uncovered pixels."
 
     artifacts = {
-        "config": config,
-        "prompt": config["prompt"],
-        "initial_view": initial_view,
-        "central_manifest": build_steps_manifest(central_records),
-        "upward_manifest": build_steps_manifest(upward_records),
-        "downward_manifest": build_steps_manifest(downward_records),
-        "pole_manifest": build_steps_manifest(pole_records),
-        "central_records": central_records,
-        "upward_records": upward_records,
-        "downward_records": downward_records,
-        "pole_records": pole_records,
+        "config": config, "prompt": config["prompt"], "initial_view": initial_view,
+        "central_manifest": build_steps_manifest(central_records), "upward_manifest": build_steps_manifest(upward_records),
+        "downward_manifest": build_steps_manifest(downward_records), "pole_manifest": build_steps_manifest(pole_records),
+        "central_records": central_records, "upward_records": upward_records, "downward_records": downward_records, "pole_records": pole_records,
         "central_panorama": central_panorama,
         "upward_panorama": upward_panorama,
         "downward_panorama": downward_panorama,

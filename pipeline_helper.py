@@ -12,6 +12,7 @@ from PIL import Image
 from PIL import ImageDraw
 
 PIPELINE_CACHE = {}
+_CACHE_LOCK = __import__("threading").Lock()
 
 _PIPELINE_DEFAULTS = {
     "prompt": "a realistic indoor panorama",
@@ -122,30 +123,25 @@ def load_pipeline_config(config_path):
         raise RuntimeError("`central_band.steps_each_direction` must be 3.")
     if config["expansion"]["steps_per_direction"] != 3:
         raise RuntimeError("`expansion.steps_per_direction` must be 3.")
-    if len(config["central_band"]["risk_weights"]) != 4:
-        raise RuntimeError("`central_band.risk_weights` must contain four values.")
-    if len(config["expansion"]["risk_weights"]) != 4:
-        raise RuntimeError("`expansion.risk_weights` must contain four values.")
-    if len(config["pole_closure"]["risk_weights"]) != 4:
-        raise RuntimeError("`pole_closure.risk_weights` must contain four values.")
+    for section in ["central_band", "expansion", "pole_closure"]:
+        if len(config[section]["risk_weights"]) != 4:
+            raise RuntimeError(f"`{section}.risk_weights` must contain four values.")
     return config
 
 
-def save_json(path, payload):
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, ensure_ascii=False)
+def _save(path, data, fmt):
+    with open(path, "w", encoding="utf-8") as f:
+        if fmt == "json":
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        elif fmt == "text":
+            f.write(data)
+        elif fmt == "image":
+            Image.fromarray(data.astype(np.uint8), mode="L" if data.ndim == 2 else "RGB").save(path)
 
 
-def save_text(path, text):
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(text)
-
-
-def save_image(path, image):
-    if image.ndim == 2:
-        Image.fromarray(image.astype(np.uint8), mode="L").save(path)
-        return
-    Image.fromarray(image.astype(np.uint8), mode="RGB").save(path)
+save_json = lambda p, d: _save(p, d, "json")
+save_text = lambda p, d: _save(p, d, "text")
+save_image = lambda p, d: _save(p, d, "image")
 
 
 def build_contact_sheet(images, labels):
@@ -160,7 +156,7 @@ def build_contact_sheet(images, labels):
     return sheet
 
 
-def make_torch_generator(torch, device, seed):
+def make_torch_generator(device, seed):
     if seed is None:
         return None
     return torch.Generator(device=device).manual_seed(int(seed))
@@ -183,20 +179,20 @@ def should_use_fp16_variant(model_name):
 
 
 def load_pipeline(cache_key, pipeline_cls, model_name):
-    if cache_key in PIPELINE_CACHE:
-        return PIPELINE_CACHE[cache_key]
+    with _CACHE_LOCK:
+        if cache_key in PIPELINE_CACHE:
+            return PIPELINE_CACHE[cache_key]
     if torch.cuda.is_available():
         device, dtype = "cuda", torch.float16
     else:
         device, dtype = "cpu", torch.float32
-    load_kwargs = {
-        "torch_dtype": dtype,
-    }
+    load_kwargs = {"torch_dtype": dtype}
     if should_use_fp16_variant(model_name):
         load_kwargs["variant"] = "fp16"
     pipe = pipeline_cls.from_pretrained(model_name, **load_kwargs)
     pipe = pipe.to(device)
-    PIPELINE_CACHE[cache_key] = (pipe, torch, device)
+    with _CACHE_LOCK:
+        PIPELINE_CACHE[cache_key] = (pipe, torch, device)
     return PIPELINE_CACHE[cache_key]
 
 
@@ -224,7 +220,7 @@ def generate_initial_view(config, generator=None):
     source_view = config["source_view"]
     pipe, torch, device = load_pipeline(("base", config["models"]["base_model"]), diffusers.StableDiffusionPipeline, config["models"]["base_model"])
     if generator is None:
-        generator = make_torch_generator(torch, device, config.get("seed"))
+        generator = make_torch_generator(device, config.get("seed"))
     result = pipe(
         prompt=prompt,
         height=source_view["height"],
@@ -255,7 +251,7 @@ def run_guided_inpaint(prompt, init_image, mask_image, guidance_image, config, g
     inpaint_config = config["inpaint"]
     pipe, torch, device = load_pipeline(("inpaint", config["models"]["inpaint_model"]), diffusers.StableDiffusionInpaintPipeline, config["models"]["inpaint_model"])
     if generator is None:
-        generator = make_torch_generator(torch, device, config.get("seed"))
+        generator = make_torch_generator(device, config.get("seed"))
 
     image = init_image
     if guidance_image is not None:
@@ -394,28 +390,18 @@ def build_view_homography(source_view, target_view):
     return homography.astype(np.float32)
 
 
+def _apply_homography(data, homography, out_size, interp, border_val=0):
+    return cv2.warpPerspective(data, homography, out_size,
+                               flags=interp | cv2.WARP_INVERSE_MAP,
+                               borderMode=cv2.BORDER_CONSTANT, borderValue=border_val)
+
+
 def warp_image_and_mask(image, homography, out_size):
-    width, height = out_size
-    warped = cv2.warpPerspective(
-        image,
-        homography,
-        (width, height),
-        flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
-    )
+    warped = _apply_homography(image, homography, out_size, cv2.INTER_LINEAR)
     valid = np.full((image.shape[0], image.shape[1]), 255, dtype=np.uint8)
-    known_mask = cv2.warpPerspective(
-        valid,
-        homography,
-        (width, height),
-        flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
-    )
+    known_mask = _apply_homography(valid, homography, out_size, cv2.INTER_NEAREST)
     known_mask = np.where(known_mask > 0, 255, 0).astype(np.uint8)
-    missing_mask = np.where(known_mask > 0, 0, 255).astype(np.uint8)
-    return warped, known_mask, missing_mask
+    return warped, known_mask, np.where(known_mask > 0, 0, 255).astype(np.uint8)
 
 
 def build_view_to_view_remap(source_view, target_view):
@@ -625,15 +611,7 @@ def compute_view_risk_maps(record, context_records, config, initial_center, risk
 
 
 def warp_risk_map(risk_map, homography, out_size):
-    width, height = out_size
-    return cv2.warpPerspective(
-        risk_map.astype(np.float32),
-        homography,
-        (width, height),
-        flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
-    )
+    return _apply_homography(risk_map.astype(np.float32), homography, out_size, cv2.INTER_LINEAR)
 
 
 def merge_warped_risks(left_risk, right_risk, left_valid_mask, right_valid_mask):
@@ -690,15 +668,6 @@ def build_equirectangular_debug(image, view, pano_width, pano_height, point_colo
     return np.array(overlay, dtype=np.uint8)
 
 
-def save_optional_image(record, step_dir, filename, key, scale=1.0):
-    if key not in record:
-        return
-    image = record[key]
-    if abs(float(scale) - 1.0) > 1e-8:
-        image = image * float(scale)
-    save_image(os.path.join(step_dir, filename), image)
-
-
 def _save_group_artifacts(group_dir, records, pano_width, pano_height):
     os.makedirs(group_dir, exist_ok=True)
     contact_images = [Image.fromarray(record["image"], mode="RGB") for record in records]
@@ -720,9 +689,12 @@ def _save_group_artifacts(group_dir, records, pano_width, pano_height):
             },
         )
         save_image(os.path.join(step_dir, "01_output.png"), record["image"])
-        save_optional_image(record, step_dir, "02_guidance.png", "guidance_image")
-        save_optional_image(record, step_dir, "03_guided_input.png", "guided_input")
-        save_optional_image(record, step_dir, "04_stitched_valid_mask.png", "stitched_valid_mask")
+        if "guidance_image" in record:
+            save_image(os.path.join(step_dir, "02_guidance.png"), record["guidance_image"])
+        if "guided_input" in record:
+            save_image(os.path.join(step_dir, "03_guided_input.png"), record["guided_input"])
+        if "stitched_valid_mask" in record:
+            save_image(os.path.join(step_dir, "04_stitched_valid_mask.png"), record["stitched_valid_mask"])
         if "stitched_weight_map" in record:
             save_image(
                 os.path.join(step_dir, "05_stitched_weight_map.png"),
@@ -758,7 +730,11 @@ def _save_group_artifacts(group_dir, records, pano_width, pano_height):
             ("22_right_known_mask.png", "right_known_mask", 1.0),
             ("23_merge_composite.png", "merge_composite", 1.0),
         ]:
-            save_optional_image(record, step_dir, filename, key, scale=scale)
+            if key in record:
+                img = record[key]
+                if abs(scale - 1.0) > 1e-8:
+                    img = img * scale
+                save_image(os.path.join(step_dir, filename), img)
         for source_index, source in enumerate(record.get("overlap_sources", [])):
             prefix = "{:02d}_{}".format(source_index, source["name"])
             save_image(os.path.join(step_dir, "24_{}_warped.png".format(prefix)), source["warped"])
