@@ -747,9 +747,9 @@ def _save_group_artifacts(group_dir, records, pano_width, pano_height):
 
 def _save_pipeline_outputs_minimal(run_dir, artifacts):
     os.makedirs(run_dir, exist_ok=True)
-    save_image(os.path.join(run_dir, "02_initial_view.png"), artifacts["initial_view"])
-    save_image(os.path.join(run_dir, "06_central_360_equirect.png"), artifacts["central_panorama"])
-    save_image(os.path.join(run_dir, "12_full_sphere_equirect.png"), artifacts["full_panorama"])
+    save_image(os.path.join(run_dir, "initial_view.png"), artifacts["initial_view"])
+    save_image(os.path.join(run_dir, "central_360_equirect.png"), artifacts["central_panorama"])
+    save_image(os.path.join(run_dir, "full_sphere_equirect.png"), artifacts["full_panorama"])
 
 
 def _save_pipeline_outputs_full(run_dir, artifacts):

@@ -82,4 +82,4 @@ risk_fallback_threshold = 0.5
 run_dir = "outputs"
 pano_width = 4096
 pano_height = 2048
-debug = true
+debug = false

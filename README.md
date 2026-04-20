@@ -19,9 +19,9 @@ Known differences:
 
 ### Example Outputs
 
-| Initial View                                                   | Central Band                                                           | Pre-Pole Sphere                                                                           | Final Sphere                                                            |
-|----------------------------------------------------------------|------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
-| ![Initial view](./outputs/20260420_110318/02_initial_view.png) | ![Central band](./outputs/20260420_110318/06_central_360_equirect.png) | ![Pre-pole panorama](./outputs/20260420_110318/09_full_sphere_without_poles_equirect.png) | ![Full panorama](./outputs/20260420_110318/12_full_sphere_equirect.png) |
+| Prompt                              | Initial View                                        | Central Band                                                | Final Sphere                                                 |
+|-------------------------------------|-----------------------------------------------------|-------------------------------------------------------------|--------------------------------------------------------------|
+| Street art area under a cloudy sky. | ![Initial view](outputs/examples/initial_view.png)  | ![Central band](outputs/examples/central_360_equirect.png)  | ![Full panorama](outputs/examples/full_sphere_equirect.png)  |
 
 ## File And Directory Overview
 

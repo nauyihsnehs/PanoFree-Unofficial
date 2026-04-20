@@ -1,9 +1,10 @@
+prompt = "Street art area under a cloudy sky."
+#prompt = "Arctic wilderness, aurora, trail"
 #prompt = "Cozy log cabin with a stone fireplace and rustic wooden furniture"
 #prompt = "Yoga studio with bamboo floors and serene décor"
 #prompt = "Desert oasis with palm trees and a shimmering pool"
 #prompt = "Crystal-clear mountain lake reflecting snow-capped peaks"
-prompt = "A cyber city rendered in low-poly game art style with geometric buildings outlined in neon and digital data displays"
-seed = 1234
+seed = 114514
 
 [models]
 base_model = "stabilityai/stable-diffusion-2-1-base"
@@ -83,4 +84,4 @@ risk_fallback_threshold = 0.5
 run_dir = "outputs"
 pano_width = 4096
 pano_height = 2048
-debug = true
+debug = false
