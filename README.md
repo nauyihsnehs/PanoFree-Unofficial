@@ -21,7 +21,7 @@ Known differences:
 
 | Prompt                              | Initial View                                        | Central Band                                                | Final Sphere                                                 |
 |-------------------------------------|-----------------------------------------------------|-------------------------------------------------------------|--------------------------------------------------------------|
-| Street art area under a cloudy sky. | ![Initial view](outputs/examples/initial_view.png)  | ![Central band](outputs/examples/central_360_equirect.png)  | ![Full panorama](outputs/examples/full_sphere_equirect.png)  |
+| Street art area under a cloudy sky. | ![Initial view](outputs/examples/initial_view.jpg)  | ![Central band](outputs/examples/central_360_equirect.jpg)  | ![Full panorama](outputs/examples/full_sphere_equirect.jpg)  |
 
 ## File And Directory Overview
 
