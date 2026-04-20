@@ -1,5 +1,7 @@
 # PanoFree-Unofficial
 
+> ⚠️ **Note**: This codebase was written with the assistance of **Codex**.
+
 Unofficial implementation of
 
 **PanoFree: Tuning-Free Holistic Multi-view Image Generation with Cross-view Self-Guidance**
